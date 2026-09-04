@@ -26,3 +26,4 @@ export {
   type SignatureStatus,
   type VerifyReceiptResult,
 } from './receipt.ts';
+export { verifyChain, type VerifyChainResult } from './chain.ts';
