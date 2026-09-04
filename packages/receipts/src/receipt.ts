@@ -24,11 +24,11 @@ export interface ReceiptGate {
   ts: string;
 }
 
-export interface ReceiptBody {
+// What the node builds and signs. The cloud assigns id, seq, and prev when it
+// stores the receipt, so those three are not part of the node signing input.
+export interface ReceiptEnvelope {
   v: 1;
-  id: string;
   ts: string;
-  seq: number;
   company: string;
   mission: string | null;
   task: string | null;
@@ -40,12 +40,20 @@ export interface ReceiptBody {
   inputs: ReceiptArtifact[];
   outputs: ReceiptArtifact[];
   gate: ReceiptGate | null;
+}
+
+export interface NodeSignedEnvelope extends ReceiptEnvelope {
+  node_sig: string;
+}
+
+// The three members the cloud assigns after the node has signed.
+export interface CloudAssigned {
+  id: string;
+  seq: number;
   prev: string | null;
 }
 
-export interface NodeSignedReceipt extends ReceiptBody {
-  node_sig: string;
-}
+export interface ReceiptBody extends ReceiptEnvelope, CloudAssigned {}
 
 export interface Receipt extends ReceiptBody {
   node_sig: string | null;
@@ -61,30 +69,36 @@ export interface VerifyReceiptResult {
   errors: string[];
 }
 
-function stripSignatures(receipt: Partial<Receipt>): ReceiptBody {
-  const { node_sig, cloud_sig, ...body } = receipt;
-  void node_sig;
-  void cloud_sig;
-  return body as ReceiptBody;
+// Everything the node knows, without the cloud-assigned members and without
+// either signature.
+function envelopeOf(value: ReceiptEnvelope | Partial<Receipt>): ReceiptEnvelope {
+  const { id, seq, prev, node_sig, cloud_sig, ...envelope } = value as Partial<Receipt>;
+  return envelope as ReceiptEnvelope;
 }
 
-export function nodeSigningInput(body: ReceiptBody): Uint8Array {
-  return canonicalBytes(stripSignatures(body));
+export function nodeSigningInput(value: ReceiptEnvelope | Receipt): Uint8Array {
+  return canonicalBytes(envelopeOf(value));
 }
 
-export function cloudSigningInput(receipt: ReceiptBody & { node_sig?: string | null }): Uint8Array {
-  return canonicalBytes({ ...stripSignatures(receipt), node_sig: receipt.node_sig ?? null });
+export function cloudSigningInput(body: ReceiptBody & { node_sig?: string | null }): Uint8Array {
+  const { cloud_sig, ...rest } = body as Receipt;
+  return canonicalBytes({ ...rest, node_sig: body.node_sig ?? null });
 }
 
-export function nodeSign(body: ReceiptBody, nodePrivate: PrivateJwk): NodeSignedReceipt {
-  if (!body.node) throw new Error('nodeSign: receipt body has no node');
-  return { ...stripSignatures(body), node_sig: signBytes(nodeSigningInput(body), nodePrivate) };
+export function nodeSign(envelope: ReceiptEnvelope, nodePrivate: PrivateJwk): NodeSignedEnvelope {
+  if (!envelope.node) throw new Error('nodeSign: envelope has no node');
+  const clean = envelopeOf(envelope);
+  return { ...clean, node_sig: signBytes(canonicalBytes(clean), nodePrivate) };
 }
 
-export function cloudSign(receipt: ReceiptBody | NodeSignedReceipt, cloudPrivate: PrivateJwk): Receipt {
-  const node_sig = 'node_sig' in receipt ? receipt.node_sig : null;
-  const unsigned = { ...stripSignatures(receipt), node_sig };
-  return { ...unsigned, cloud_sig: signBytes(cloudSigningInput(unsigned), cloudPrivate) };
+export function cloudSign(
+  envelope: ReceiptEnvelope | NodeSignedEnvelope,
+  assigned: CloudAssigned,
+  cloudPrivate: PrivateJwk,
+): Receipt {
+  const node_sig = 'node_sig' in envelope ? envelope.node_sig ?? null : null;
+  const body = { ...envelopeOf(envelope), id: assigned.id, seq: assigned.seq, prev: assigned.prev, node_sig };
+  return { ...body, cloud_sig: signBytes(cloudSigningInput(body), cloudPrivate) };
 }
 
 export function receiptHash(receipt: Receipt): string {

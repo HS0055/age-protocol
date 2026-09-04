@@ -2,23 +2,27 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   generateKeyPair, nodeSign, cloudSign, receiptHash, canonicalBytes, merkleRoot, inclusionProof, signBytes, thumbprint,
-  type ReceiptBody, type Receipt,
+  type ReceiptEnvelope, type Receipt,
 } from '@agie/receipts';
 import { runVerify } from '../src/verify.ts';
 
 const node = generateKeyPair();
 const cloud = generateKeyPair();
 
-function body(seq: number, prev: string | null): ReceiptBody {
+function envelope(seq: number): ReceiptEnvelope {
   return {
-    v: 1, id: `rcpt_${seq}`, ts: '2026-09-04T00:00:00Z', seq, company: 'org', mission: 'msn_1', task: 'tsk_1', run: 'run_1',
+    v: 1, ts: '2026-09-04T00:00:00Z', company: 'org', mission: 'msn_1', task: 'tsk_1', run: 'run_1',
     actor: { type: 'agent', jkt: 'agent', level: 0 }, node: { jkt: thumbprint(node.publicJwk) }, cloud: { jkt: thumbprint(cloud.publicJwk) },
-    action: { type: 'git.commit' }, inputs: [], outputs: [], gate: null, prev,
+    action: { type: 'git.commit' }, inputs: [], outputs: [], gate: null,
   };
 }
 
-const r1 = cloudSign(nodeSign(body(1, null), node.privateJwk), cloud.privateJwk);
-const r2 = cloudSign(nodeSign(body(2, receiptHash(r1)), node.privateJwk), cloud.privateJwk);
+function issue(seq: number, prev: string | null): Receipt {
+  return cloudSign(nodeSign(envelope(seq), node.privateJwk), { id: `rcpt_${seq}`, seq, prev }, cloud.privateJwk);
+}
+
+const r1 = issue(1, null);
+const r2 = issue(2, receiptHash(r1));
 const leaves = [r1, r2].map((r) => canonicalBytes(r));
 const rootHex = merkleRoot(leaves).toString('hex');
 const rootDoc = { date: '2026-09-04', size: 2, root: rootHex, cloud: { jkt: thumbprint(cloud.publicJwk) }, sig: '' };
