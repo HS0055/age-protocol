@@ -132,3 +132,94 @@ test('a JWKS entry mislabelled with the node kid is not trusted', async () => {
   assert.equal(code, 1);
   assert.ok(out.includes('node     unknown_key'));
 });
+
+test('an unknown flag is an input error', async () => {
+  const { io, err } = files();
+  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--chian', 'chain.json'], io);
+  assert.equal(code, 2);
+  assert.ok(err.some((line) => /unknown flag/.test(line)));
+});
+
+const malformed: Array<[string, Record<string, unknown>]> = [
+  ['receipt that is an array', { 'receipt.json': [] }],
+  ['receipt without typ', { 'receipt.json': { ...r2, typ: undefined } }],
+  ['receipt with a non-string id', { 'receipt.json': { ...r2, id: 7 } }],
+  ['receipt without node', { 'receipt.json': { ...r2, node: undefined } }],
+  ['receipt with a node without jkt', { 'receipt.json': { ...r2, node: {} } }],
+  ['receipt without cloud', { 'receipt.json': { ...r2, cloud: undefined } }],
+  ['receipt without cloud_sig', { 'receipt.json': { ...r2, cloud_sig: undefined } }],
+  ['jwks with a null key', { 'jwks.json': { keys: [null] } }],
+  ['jwks with a key without x', { 'jwks.json': { keys: [{ kty: 'OKP', crv: 'Ed25519' }] } }],
+  ['jwks that is not an object', { 'jwks.json': [] }],
+];
+
+for (const [name, extra] of malformed) {
+  test(`${name} exits 2`, async () => {
+    const { io, err } = files(extra);
+    const code = await runVerify(['receipt.json', '--jwks', 'jwks.json'], io);
+    assert.equal(code, 2);
+    assert.ok(err.some((line) => /cannot read input/.test(line)), err.join('|'));
+  });
+}
+
+const malformedChain: Array<[string, unknown]> = [
+  ['chain that is null', null],
+  ['chain that is an object', {}],
+  ['chain with a null element', [null, r2]],
+  ['chain with a receipt without cloud', [{ ...r1, cloud: undefined }, r2]],
+];
+
+for (const [name, value] of malformedChain) {
+  test(`${name} exits 2`, async () => {
+    const { io, err } = files({ 'chain.json': value });
+    const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--chain', 'chain.json'], io);
+    assert.equal(code, 2);
+    assert.ok(err.some((line) => /cannot read input/.test(line)), err.join('|'));
+  });
+}
+
+const goodProof = inclusionProof(leaves, 1);
+const malformedProof: Array<[string, unknown]> = [
+  ['proof that is null', null],
+  ['proof that is a number', 0],
+  ['proof without path', { index: 1, size: 2 }],
+  ['proof with a numeric path', { ...goodProof, path: 5 }],
+  ['proof with a numeric path entry', { ...goodProof, path: [1] }],
+  ['proof with a short hex path entry', { ...goodProof, path: ['abcd'] }],
+  ['proof without an integer index', { ...goodProof, index: 1.5 }],
+  ['proof without an integer size', { ...goodProof, size: 'two' }],
+];
+
+for (const [name, value] of malformedProof) {
+  test(`${name} exits 2`, async () => {
+    const { io, err } = files({ 'proof.json': value });
+    const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
+    assert.equal(code, 2);
+    assert.ok(err.some((line) => /cannot read input/.test(line)), err.join('|'));
+  });
+}
+
+const malformedRoot: Array<[string, unknown]> = [
+  ['root that is null', null],
+  ['root that is an array', []],
+  ['root without typ', { ...rootDoc, typ: undefined }],
+  ['root without an integer size', { ...rootDoc, size: 'two' }],
+  ['root without sig', { ...rootDoc, sig: undefined }],
+];
+
+for (const [name, value] of malformedRoot) {
+  test(`${name} exits 2`, async () => {
+    const { io, err } = files({ 'root.json': value });
+    const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
+    assert.equal(code, 2);
+    assert.ok(err.some((line) => /cannot read input/.test(line)), err.join('|'));
+  });
+}
+
+test('an exception in the verification phase is reported, not thrown', async () => {
+  const { io, err } = files();
+  const broken = { ...io, stdout: () => { throw new Error('boom'); } };
+  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json'], broken);
+  assert.equal(code, 2);
+  assert.ok(err.some((line) => /internal error: boom/.test(line)), err.join('|'));
+});

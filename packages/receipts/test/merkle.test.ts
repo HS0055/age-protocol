@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { leafHash, merkleRoot, inclusionProof, verifyInclusion } from '../src/index.ts';
+import { leafHash, merkleRoot, inclusionProof, verifyInclusion, type InclusionProof } from '../src/index.ts';
 
 const enc = (s: string) => new TextEncoder().encode(s);
 const hex = (b: Buffer) => b.toString('hex');
@@ -52,4 +52,14 @@ test('inclusion fails for wrong leaf, wrong root, or wrong index', () => {
 
 test('inclusionProof rejects an out-of-range index', () => {
   assert.throws(() => inclusionProof([enc('a')], 1), /out of range/);
+});
+
+test('verifyInclusion rejects a malformed path instead of throwing', () => {
+  const leaves = [enc('a'), enc('b')];
+  const root = hex(merkleRoot(leaves));
+  const proof = inclusionProof(leaves, 0);
+  const withPath = (path: unknown) => ({ ...proof, path }) as unknown as InclusionProof;
+  for (const path of [5, undefined, null, 'abc', [1], [null], [['x']], ['zz'.repeat(32)], ['abcd']]) {
+    assert.equal(verifyInclusion(enc('a'), withPath(path), root), false, `path ${JSON.stringify(path)}`);
+  }
 });

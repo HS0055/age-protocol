@@ -56,16 +56,19 @@ export function inclusionProof(leaves: Uint8Array[], index: number): InclusionPr
   return { index, size: leaves.length, path };
 }
 
-// RFC 9162 section 2.1.3.2.
+const HEX_32_BYTES = /^[0-9a-fA-F]{64}$/;
+
+// RFC 9162 section 2.1.3.2. A malformed proof is a false, never an exception.
 export function verifyInclusion(leafData: Uint8Array, proof: InclusionProof, rootHex: string): boolean {
   if (!Number.isInteger(proof.index) || proof.index < 0 || proof.index >= proof.size) return false;
+  if (!Array.isArray(proof.path)) return false;
   let fn = proof.index;
   let sn = proof.size - 1;
   let r: Buffer = leafHash(leafData);
   for (const entry of proof.path) {
     if (sn === 0) return false;
+    if (typeof entry !== 'string' || !HEX_32_BYTES.test(entry)) return false;
     const p = Buffer.from(entry, 'hex');
-    if (p.length !== 32) return false;
     if ((fn & 1) === 1 || fn === sn) {
       r = nodeHash(p, r);
       if ((fn & 1) === 0) {
