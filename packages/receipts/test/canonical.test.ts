@@ -32,3 +32,13 @@ test('canonicalBytes is UTF-8 of canonicalize', () => {
   const bytes = canonicalBytes({ s: 'hé' });
   assert.equal(Buffer.from(bytes).toString('utf8'), '{"s":"hé"}');
 });
+
+test('keeps a member named __proto__ as an own property', () => {
+  const input = JSON.parse('{"action":{"type":"git.commit","__proto__":{"hidden":true}},"b":1}');
+  assert.equal(canonicalize(input), '{"action":{"__proto__":{"hidden":true},"type":"git.commit"},"b":1}');
+});
+
+test('a __proto__ member changes the canonical bytes', () => {
+  const withMember = JSON.parse('{"a":1,"__proto__":{"hidden":true}}');
+  assert.notEqual(canonicalize(withMember), canonicalize({ a: 1 }));
+});

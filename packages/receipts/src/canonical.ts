@@ -13,7 +13,9 @@ function sortKeysDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeysDeep);
   if (value !== null && typeof value === 'object') {
     const source = value as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
+    // A null prototype keeps a member named __proto__ an own property instead
+    // of letting the assignment below set the prototype and drop the member.
+    const out = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(source).sort()) {
       const item = source[key];
       if (item === undefined) continue;
