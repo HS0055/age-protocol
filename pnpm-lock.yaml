@@ -15,6 +15,8 @@ importers:
         specifier: ^5.8.0
         version: 5.9.3
 
+  packages/receipts: {}
+
 packages:
 
   '@types/node@24.13.3':
