@@ -2,6 +2,8 @@ export { canonicalize, canonicalBytes } from './canonical.ts';
 export {
   generateKeyPair,
   thumbprint,
+  isPublicJwk,
+  keyMapFromJwks,
   withKid,
   toPublicJwk,
   publicKeyFromJwk,

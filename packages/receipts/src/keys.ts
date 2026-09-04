@@ -18,6 +18,26 @@ export function thumbprint(jwk: PublicJwk): string {
   return createHash('sha256').update(canonical).digest('base64url');
 }
 
+export function isPublicJwk(value: unknown): value is PublicJwk {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const jwk = value as Record<string, unknown>;
+  return typeof jwk.kty === 'string' && typeof jwk.crv === 'string' && typeof jwk.x === 'string';
+}
+
+// Index a JWKS by the RFC 7638 thumbprint of each key, so lookup is
+// cryptographic and a wrong or missing kid label cannot bind a jkt to a key
+// that does not hash to it. The first entry for a thumbprint wins.
+export function keyMapFromJwks(keys: PublicJwk[]): Map<string, PublicJwk> {
+  const map = new Map<string, PublicJwk>();
+  if (!Array.isArray(keys)) return map;
+  for (const key of keys) {
+    if (!isPublicJwk(key)) continue;
+    const jkt = thumbprint(key);
+    if (!map.has(jkt)) map.set(jkt, key);
+  }
+  return map;
+}
+
 export function withKid(jwk: PublicJwk): PublicJwk {
   return { kty: jwk.kty, crv: jwk.crv, x: jwk.x, kid: thumbprint(jwk) };
 }

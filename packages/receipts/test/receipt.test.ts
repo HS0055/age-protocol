@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   generateKeyPair, nodeSign, cloudSign, receiptHash, verifyReceipt, thumbprint,
-  nodeSigningInput, cloudSigningInput, RECEIPT_TYP,
+  nodeSigningInput, cloudSigningInput, keyMapFromJwks, RECEIPT_TYP,
   type ReceiptEnvelope, type Receipt,
 } from '../src/index.ts';
 
@@ -172,4 +172,37 @@ test('a node may carry its own public jwk', () => {
   );
   assert.deepEqual(receipt.node?.jwk, node.publicJwk);
   assert.deepEqual(verifyReceipt(receipt, [node.publicJwk, cloud.publicJwk]), { ok: true, node: 'valid', cloud: 'valid', errors: [] });
+});
+
+test('a JWKS entry mislabelled with the node kid does not verify the node signature', () => {
+  const impostor = { ...stranger.publicJwk, kid: thumbprint(node.publicJwk) };
+  const result = verifyReceipt(issue(), [impostor, cloud.publicJwk]);
+  assert.equal(result.ok, false);
+  assert.equal(result.node, 'unknown_key');
+});
+
+test('an embedded node jwk verifies against a JWKS holding only the cloud key', () => {
+  const receipt = cloudSign(
+    nodeSign(envelope({ node: { jkt: thumbprint(node.publicJwk), jwk: node.publicJwk } }), node.privateJwk),
+    assigned,
+    cloud.privateJwk,
+  );
+  assert.deepEqual(verifyReceipt(receipt, [cloud.publicJwk]), { ok: true, node: 'valid', cloud: 'valid', errors: [] });
+});
+
+test('an embedded node jwk whose thumbprint does not match jkt is rejected', () => {
+  const receipt = cloudSign(
+    nodeSign(envelope({ node: { jkt: thumbprint(node.publicJwk), jwk: stranger.publicJwk } }), node.privateJwk),
+    assigned,
+    cloud.privateJwk,
+  );
+  const result = verifyReceipt(receipt, [node.publicJwk, cloud.publicJwk]);
+  assert.equal(result.ok, false);
+  assert.equal(result.node, 'invalid');
+  assert.match(result.errors[0] ?? '', /jwk/);
+});
+
+test('verifyReceipt accepts a prebuilt key map', () => {
+  const map = keyMapFromJwks([node.publicJwk, cloud.publicJwk]);
+  assert.equal(verifyReceipt(issue(), map).ok, true);
 });

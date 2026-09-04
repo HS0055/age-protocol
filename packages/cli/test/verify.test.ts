@@ -115,3 +115,20 @@ test('usage errors exit 2', async () => {
   assert.equal(await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json'], io), 2);
   assert.ok(err.length > 0);
 });
+
+test('a JWKS without kid labels verifies both the receipt and the root', async () => {
+  const bare = [node.publicJwk, cloud.publicJwk].map(({ kty, crv, x }) => ({ kty, crv, x }));
+  const { io, out } = files({ 'jwks.json': { keys: bare } });
+  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
+  assert.equal(code, 0);
+  assert.ok(out.includes('node     valid'));
+  assert.ok(out.includes('root     valid (2026-09-04, size 2, included)'));
+});
+
+test('a JWKS entry mislabelled with the node kid is not trusted', async () => {
+  const impostor = { ...generateKeyPair().publicJwk, kid: thumbprint(node.publicJwk) };
+  const { io, out } = files({ 'jwks.json': { keys: [impostor, cloud.publicJwk] } });
+  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json'], io);
+  assert.equal(code, 1);
+  assert.ok(out.includes('node     unknown_key'));
+});

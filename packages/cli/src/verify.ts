@@ -1,5 +1,5 @@
 import {
-  canonicalBytes, verifyBytes, verifyChain, verifyInclusion, verifyReceipt, ROOT_TYP,
+  canonicalBytes, keyMapFromJwks, verifyBytes, verifyChain, verifyInclusion, verifyReceipt, ROOT_TYP,
   type InclusionProof, type PublicJwk, type Receipt,
 } from '@agie/receipts';
 
@@ -87,9 +87,10 @@ export async function runVerify(args: string[], io: VerifyIo): Promise<number> {
   }
 
   let failed = false;
+  const byThumbprint = keyMapFromJwks(keys);
   io.stdout(`receipt  ${receipt.id}`);
 
-  const signatures = verifyReceipt(receipt, keys);
+  const signatures = verifyReceipt(receipt, byThumbprint);
   io.stdout(`node     ${signatures.node}`);
   io.stdout(`cloud    ${signatures.cloud}`);
   for (const error of signatures.errors) io.stderr(error);
@@ -112,7 +113,7 @@ export async function runVerify(args: string[], io: VerifyIo): Promise<number> {
   }
 
   if (root && proof) {
-    const cloudKey = keys.find((key) => key.kid === root.cloud.jkt);
+    const cloudKey = byThumbprint.get(root.cloud.jkt);
     const rootBytes = canonicalBytes({ typ: ROOT_TYP, date: root.date, size: root.size, root: root.root });
     if (root.typ !== ROOT_TYP) {
       io.stderr(`root document typ ${String(root.typ)} is not ${ROOT_TYP}`);

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { canonicalBytes } from './canonical.ts';
-import { thumbprint, type PrivateJwk, type PublicJwk } from './keys.ts';
+import { isPublicJwk, keyMapFromJwks, thumbprint, type PrivateJwk, type PublicJwk } from './keys.ts';
 import { signBytes, verifyBytes } from './signature.ts';
 
 // Domain separation: every signed AGIE document names its own type, so a
@@ -122,15 +122,22 @@ export function cloudSign(
   return { ...body, cloud_sig: signBytes(cloudSigningInput(body), cloudPrivate) };
 }
 
+// A node may publish its own key inside the receipt. It counts only when it
+// hashes to the jkt the two signatures cover, which makes it self-certifying.
+function embeddedNodeKey(node: ReceiptNode): PublicJwk | undefined {
+  if (!isPublicJwk(node.jwk)) return undefined;
+  return thumbprint(node.jwk) === node.jkt ? node.jwk : undefined;
+}
+
 export function receiptHash(receipt: Receipt): string {
   return createHash('sha256').update(canonicalBytes(receipt)).digest('hex');
 }
 
-function findKey(keys: PublicJwk[], jkt: string): PublicJwk | undefined {
-  return keys.find((key) => (key.kid ?? thumbprint(key)) === jkt);
-}
-
-export function verifyReceipt(receipt: Receipt, keys: PublicJwk[]): VerifyReceiptResult {
+export function verifyReceipt(
+  receipt: Receipt,
+  keys: PublicJwk[] | Map<string, PublicJwk>,
+): VerifyReceiptResult {
+  const byThumbprint = Array.isArray(keys) ? keyMapFromJwks(keys) : keys;
   const errors: string[] = [];
   let node: VerifyReceiptResult['node'];
 
@@ -153,8 +160,11 @@ export function verifyReceipt(receipt: Receipt, keys: PublicJwk[]): VerifyReceip
   } else if (typeof receipt.node_sig !== 'string') {
     errors.push('node present but node_sig missing');
     node = 'invalid';
+  } else if (receipt.node.jwk !== undefined && !embeddedNodeKey(receipt.node)) {
+    errors.push('embedded node jwk does not match node.jkt');
+    node = 'invalid';
   } else {
-    const nodeKey = findKey(keys, receipt.node.jkt);
+    const nodeKey = embeddedNodeKey(receipt.node) ?? byThumbprint.get(receipt.node.jkt);
     if (!nodeKey) {
       errors.push(`node key ${receipt.node.jkt} not in key set`);
       node = 'unknown_key';
@@ -167,7 +177,7 @@ export function verifyReceipt(receipt: Receipt, keys: PublicJwk[]): VerifyReceip
   }
 
   let cloud: SignatureStatus;
-  const cloudKey = findKey(keys, receipt.cloud.jkt);
+  const cloudKey = byThumbprint.get(receipt.cloud.jkt);
   if (!cloudKey) {
     errors.push(`cloud key ${receipt.cloud.jkt} not in key set`);
     cloud = 'unknown_key';
