@@ -251,3 +251,34 @@ test('a proof whose size differs from the root document fails', async () => {
   assert.ok(out.includes('root     size mismatch'), out.join('|'));
   assert.ok(err.some((line) => /size/.test(line)), err.join('|'));
 });
+
+test('control characters in echoed strings are stripped', async () => {
+  const nasty = cloudSign(
+    nodeSign(envelope(3), node.privateJwk),
+    { id: 'rcpt_\u001b[2K\u0007red', seq: 3, prev: null },
+    cloud.privateJwk,
+  );
+  const { io, out } = files({ 'receipt.json': nasty });
+  await runVerify(['receipt.json', '--jwks', 'jwks.json'], io);
+  assert.equal(out[0], 'receipt  rcpt_[2Kred');
+  assert.ok(out.every((line) => !/[\u0000-\u001f\u007f]/.test(line)), out.join('|'));
+});
+
+test('control characters in an error message are stripped', async () => {
+  const nasty = cloudSign(
+    nodeSign({ ...envelope(4), node: { jkt: 'jkt\u001b[31m evil' } }, node.privateJwk),
+    { id: 'rcpt_4', seq: 4, prev: null },
+    cloud.privateJwk,
+  );
+  const { io, err } = files({ 'receipt.json': nasty });
+  await runVerify(['receipt.json', '--jwks', 'jwks.json'], io);
+  assert.ok(err.some((line) => line === 'node key jkt[31m evil not in key set'), err.join('|'));
+  assert.ok(err.every((line) => !/[\u0000-\u001f\u007f]/.test(line)), err.join('|'));
+});
+
+test('control characters in a usage error are stripped', async () => {
+  const { io, err } = files();
+  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--ch\u001bain', 'chain.json'], io);
+  assert.equal(code, 2);
+  assert.ok(err.some((line) => line === 'unknown flag: --chain'), err.join('|'));
+});

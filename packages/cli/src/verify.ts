@@ -126,6 +126,19 @@ function reject(problem: string | undefined): void {
   if (problem !== undefined) throw new Error(problem);
 }
 
+// Every string that reaches the terminal can carry input the verifier does
+// not control, so strip the characters that could rewrite the visible output.
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/g;
+
+function sanitized(io: VerifyIo): VerifyIo {
+  const strip = (line: string) => line.replace(CONTROL_CHARACTERS, '');
+  return {
+    readFile: (path: string) => io.readFile(path),
+    stdout: (line: string) => io.stdout(strip(line)),
+    stderr: (line: string) => io.stderr(strip(line)),
+  };
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -242,7 +255,8 @@ function runChecks(parsed: ParsedArgs, inputs: Inputs, io: VerifyIo): number {
   return failed ? 1 : 0;
 }
 
-export async function runVerify(args: string[], io: VerifyIo): Promise<number> {
+export async function runVerify(args: string[], rawIo: VerifyIo): Promise<number> {
+  const io = sanitized(rawIo);
   const parsed = parseArgs(args);
   if (typeof parsed === 'string') {
     io.stderr(parsed);
