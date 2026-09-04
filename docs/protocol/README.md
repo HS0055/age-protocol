@@ -1,0 +1,76 @@
+# AGIE Cloud to Runtime Protocol, v0 (draft)
+
+This document is the contract between AGIE Cloud and an AGIE Runtime node.
+It is published here, in the open runtime repository, so anyone can build a
+runtime or a client. Version 0 is a draft; breaking changes are expected
+until v1 is tagged.
+
+## Principles
+
+- The runtime only dials out. It never listens on a public port.
+- Every runtime request is signed with the node key (RFC 9449 DPoP proof
+  with an EdDSA JWK). The cloud stores public keys only.
+- Source code never crosses the wire. Logs, metadata, and hashes do.
+- Every meaningful event becomes a receipt signed by the node and
+  countersigned by the cloud (see Receipts below).
+
+## Identities
+
+| Entity | Key | Id |
+|---|---|---|
+| Node | Ed25519, generated on the machine | RFC 7638 thumbprint (`jkt`) |
+| Agent | Ed25519, generated on the machine (Alien Agent ID format) | `jkt` |
+| Cloud | Ed25519, published in JWKS | `jkt` |
+
+Cloud discovery: `GET https://<cloud>/.well-known/agie.json` returns
+`{ "version": 0, "jwks_uri": ".../.well-known/agie-jwks.json", "api": "https://<cloud>/api/runtime" }`.
+The JWKS document is `{ "keys": [PublicJwk] }` with `kid` equal to the thumbprint.
+
+## Link flow
+
+1. `agie runtime link` generates the node key and prints a one-time code.
+2. The user opens `https://<cloud>/link/<code>` while signed in and chooses an org.
+3. The runtime polls `POST /api/runtime/link/exchange` with the code and its
+   public key until the cloud returns a node credential bound to the key.
+4. From then on every request carries `Authorization: DPoP <credential>` and
+   a `DPoP` proof JWT signed by the node key.
+
+## Heartbeat
+
+`POST /api/runtime/heartbeat` every 30 seconds with
+`{ "runtime_version", "capabilities": { "cpu_cores", "ram_gb", "gpu", "disk_gb", "os", "arch", "agent_clis": [], "max_sessions" } }`.
+
+## Jobs
+
+- `GET /api/runtime/jobs?wait=25` long-polls for up to 25 seconds and returns
+  at most one job: `{ "id", "run_id", "adapter", "repo": { "url", "ref" }, "prompt_bundle_url", "policy": { ... } }`.
+- `POST /api/runtime/jobs/:id/claim` claims it atomically; a second claim returns 409.
+- `POST /api/runtime/jobs/:id/logs` appends `{ "stream": "stdout" | "stderr", "seq", "chunk" }`.
+- `POST /api/runtime/jobs/:id/events` posts a node-signed receipt body for
+  `session.started`, `tool.gated`, `git.commit`, `session.finished`. The cloud
+  countersigns, assigns `seq` and `prev`, stores it, and returns the receipt.
+- `POST /api/runtime/jobs/:id/result` posts
+  `{ "exit_code", "session_id", "usage", "changed_files": [{ "path_hash", "sha256" }], "work_products": [] }`.
+
+## Gates
+
+When the runtime's PreToolUse hook intercepts a gated action it posts
+`POST /api/runtime/gates` with `{ "run_id", "class", "summary" }` and receives
+`{ "decision": "approved" | "rejected" | "pending", "approval_id" }`. While
+pending, the runtime polls `GET /api/runtime/gates/:approval_id` every 5 seconds.
+
+## Receipts
+
+Receipt schema, signing inputs, chain rules, and Merkle roots are implemented
+in `packages/receipts` and are normative:
+
+- canonical form: RFC 8785
+- node signature: Ed25519 over the canonical body without `node_sig` and `cloud_sig`
+- cloud signature: Ed25519 over the canonical body with `node_sig`, without `cloud_sig`
+- receipt hash: SHA-256 hex over the canonical full receipt
+- chain: `prev` is the hash of the previous receipt in the same mission; `seq` is global and strictly increasing
+- daily root: RFC 6962 Merkle root over the canonical bytes of every receipt
+  issued that UTC day, published as `{ "date", "size", "root", "cloud": { "jkt" }, "sig" }`
+  where `sig` signs the canonical bytes of `{ date, size, root }`
+
+`agie verify` checks all of the above offline.
