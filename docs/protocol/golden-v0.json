@@ -1,0 +1,245 @@
+{
+  "note": "Golden interop vector for the AGIE receipt protocol v0. Fixed keys, fixed events, byte-identical output. Ed25519 is deterministic, so any conforming implementation reproduces every signature here.",
+  "typ": {
+    "receipt": "agie/receipt/1",
+    "root": "agie/root/1"
+  },
+  "keys": {
+    "node_private": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI",
+      "d": "CvQU_DK7O3sM-JrIFU921zbpLfsPPo2T66nUuJAYOco"
+    },
+    "node_public": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI",
+      "kid": "Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw"
+    },
+    "node_jkt": "Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw",
+    "cloud_private": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "4yPv79M7Uisr3EgqnoMis3sP1oNS8ZS-dOC6pl7AZxA",
+      "d": "kiC9G4g5LyH7sSXVF5lR4WkHCVUBsa9ANwMdb27Ymug"
+    },
+    "cloud_public": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "4yPv79M7Uisr3EgqnoMis3sP1oNS8ZS-dOC6pl7AZxA",
+      "kid": "kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM"
+    },
+    "cloud_jkt": "kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM"
+  },
+  "receipts": [
+    {
+      "envelope": {
+        "typ": "agie/receipt/1",
+        "v": 1,
+        "ts": "2026-09-04T14:02:11Z",
+        "company": "org_golden",
+        "mission": "msn_1",
+        "task": "tsk_1",
+        "run": "run_1",
+        "actor": {
+          "type": "agent",
+          "jkt": "agent_golden",
+          "level": 0
+        },
+        "node": {
+          "jkt": "Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw"
+        },
+        "cloud": {
+          "jkt": "kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM"
+        },
+        "action": {
+          "type": "session.started",
+          "adapter": "claude-code"
+        },
+        "inputs": [
+          {
+            "kind": "prompt_bundle",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "outputs": [],
+        "gate": null
+      },
+      "node_signing_input": "{\"action\":{\"adapter\":\"claude-code\",\"type\":\"session.started\"},\"actor\":{\"jkt\":\"agent_golden\",\"level\":0,\"type\":\"agent\"},\"cloud\":{\"jkt\":\"kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\"},\"company\":\"org_golden\",\"gate\":null,\"inputs\":[{\"kind\":\"prompt_bundle\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}],\"mission\":\"msn_1\",\"node\":{\"jkt\":\"Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\"},\"node_sig\":\"p9ZrlUVx60O_FQOGyitHzXsT16O0dT8O3d9tBsMg6at2zpAGkqD-YlcL7H34ZmtDrTiFHlChlrdZv5nLUa-ODw\",\"outputs\":[],\"run\":\"run_1\",\"task\":\"tsk_1\",\"ts\":\"2026-09-04T14:02:11Z\",\"typ\":\"agie/receipt/1\",\"v\":1}",
+      "node_sig": "p9ZrlUVx60O_FQOGyitHzXsT16O0dT8O3d9tBsMg6at2zpAGkqD-YlcL7H34ZmtDrTiFHlChlrdZv5nLUa-ODw",
+      "assigned": {
+        "id": "rcpt_golden_1",
+        "seq": 1,
+        "prev": null
+      },
+      "cloud_signing_input": "{\"action\":{\"adapter\":\"claude-code\",\"type\":\"session.started\"},\"actor\":{\"jkt\":\"agent_golden\",\"level\":0,\"type\":\"agent\"},\"cloud\":{\"jkt\":\"kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\"},\"company\":\"org_golden\",\"gate\":null,\"id\":\"rcpt_golden_1\",\"inputs\":[{\"kind\":\"prompt_bundle\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}],\"mission\":\"msn_1\",\"node\":{\"jkt\":\"Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\"},\"node_sig\":\"p9ZrlUVx60O_FQOGyitHzXsT16O0dT8O3d9tBsMg6at2zpAGkqD-YlcL7H34ZmtDrTiFHlChlrdZv5nLUa-ODw\",\"outputs\":[],\"prev\":null,\"run\":\"run_1\",\"seq\":1,\"task\":\"tsk_1\",\"ts\":\"2026-09-04T14:02:11Z\",\"typ\":\"agie/receipt/1\",\"v\":1}",
+      "receipt": {
+        "typ": "agie/receipt/1",
+        "v": 1,
+        "ts": "2026-09-04T14:02:11Z",
+        "company": "org_golden",
+        "mission": "msn_1",
+        "task": "tsk_1",
+        "run": "run_1",
+        "actor": {
+          "type": "agent",
+          "jkt": "agent_golden",
+          "level": 0
+        },
+        "node": {
+          "jkt": "Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw"
+        },
+        "cloud": {
+          "jkt": "kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM"
+        },
+        "action": {
+          "type": "session.started",
+          "adapter": "claude-code"
+        },
+        "inputs": [
+          {
+            "kind": "prompt_bundle",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "outputs": [],
+        "gate": null,
+        "id": "rcpt_golden_1",
+        "seq": 1,
+        "prev": null,
+        "node_sig": "p9ZrlUVx60O_FQOGyitHzXsT16O0dT8O3d9tBsMg6at2zpAGkqD-YlcL7H34ZmtDrTiFHlChlrdZv5nLUa-ODw",
+        "cloud_sig": "B8i4zVV80mhFPRyhkYM829s0_MfXRHjdEUOJN-H3PgDEkz_dcwWu2OnvxxYNuP7XmUAqPBKujJnqVAIPTWbPAQ"
+      },
+      "receipt_hash": "d8f87b46c31c3416d83a1d7e3c8f6b0de6131502ca004a23f3c4583fe25fd2c0"
+    },
+    {
+      "envelope": {
+        "typ": "agie/receipt/1",
+        "v": 1,
+        "ts": "2026-09-04T14:09:48Z",
+        "company": "org_golden",
+        "mission": "msn_1",
+        "task": "tsk_1",
+        "run": "run_1",
+        "actor": {
+          "type": "agent",
+          "jkt": "agent_golden",
+          "level": 0
+        },
+        "node": {
+          "jkt": "Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw",
+          "jwk": {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI",
+            "kid": "Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw"
+          }
+        },
+        "cloud": {
+          "jkt": "kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM"
+        },
+        "action": {
+          "type": "git.commit",
+          "ref": "9f1c2ab",
+          "files": 3
+        },
+        "inputs": [
+          {
+            "kind": "prompt_bundle",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "outputs": [
+          {
+            "kind": "diff",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "gate": null
+      },
+      "node_signing_input": "{\"action\":{\"files\":3,\"ref\":\"9f1c2ab\",\"type\":\"git.commit\"},\"actor\":{\"jkt\":\"agent_golden\",\"level\":0,\"type\":\"agent\"},\"cloud\":{\"jkt\":\"kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\"},\"company\":\"org_golden\",\"gate\":null,\"inputs\":[{\"kind\":\"prompt_bundle\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}],\"mission\":\"msn_1\",\"node\":{\"jkt\":\"Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"jwk\":{\"crv\":\"Ed25519\",\"kid\":\"Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"kty\":\"OKP\",\"x\":\"IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI\"}},\"node_sig\":\"zChgc-YHsaJRNQ7b2yLHMA0VWkjcG-ANlC_QlNUGxQkMmvRtFpgP5KCRrbwSyT47QFxZkf5lUGiQDlpmgsR8Cw\",\"outputs\":[{\"kind\":\"diff\",\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}],\"run\":\"run_1\",\"task\":\"tsk_1\",\"ts\":\"2026-09-04T14:09:48Z\",\"typ\":\"agie/receipt/1\",\"v\":1}",
+      "node_sig": "zChgc-YHsaJRNQ7b2yLHMA0VWkjcG-ANlC_QlNUGxQkMmvRtFpgP5KCRrbwSyT47QFxZkf5lUGiQDlpmgsR8Cw",
+      "assigned": {
+        "id": "rcpt_golden_2",
+        "seq": 2,
+        "prev": "d8f87b46c31c3416d83a1d7e3c8f6b0de6131502ca004a23f3c4583fe25fd2c0"
+      },
+      "cloud_signing_input": "{\"action\":{\"files\":3,\"ref\":\"9f1c2ab\",\"type\":\"git.commit\"},\"actor\":{\"jkt\":\"agent_golden\",\"level\":0,\"type\":\"agent\"},\"cloud\":{\"jkt\":\"kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\"},\"company\":\"org_golden\",\"gate\":null,\"id\":\"rcpt_golden_2\",\"inputs\":[{\"kind\":\"prompt_bundle\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}],\"mission\":\"msn_1\",\"node\":{\"jkt\":\"Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"jwk\":{\"crv\":\"Ed25519\",\"kid\":\"Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"kty\":\"OKP\",\"x\":\"IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI\"}},\"node_sig\":\"zChgc-YHsaJRNQ7b2yLHMA0VWkjcG-ANlC_QlNUGxQkMmvRtFpgP5KCRrbwSyT47QFxZkf5lUGiQDlpmgsR8Cw\",\"outputs\":[{\"kind\":\"diff\",\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}],\"prev\":\"d8f87b46c31c3416d83a1d7e3c8f6b0de6131502ca004a23f3c4583fe25fd2c0\",\"run\":\"run_1\",\"seq\":2,\"task\":\"tsk_1\",\"ts\":\"2026-09-04T14:09:48Z\",\"typ\":\"agie/receipt/1\",\"v\":1}",
+      "receipt": {
+        "typ": "agie/receipt/1",
+        "v": 1,
+        "ts": "2026-09-04T14:09:48Z",
+        "company": "org_golden",
+        "mission": "msn_1",
+        "task": "tsk_1",
+        "run": "run_1",
+        "actor": {
+          "type": "agent",
+          "jkt": "agent_golden",
+          "level": 0
+        },
+        "node": {
+          "jkt": "Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw",
+          "jwk": {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI",
+            "kid": "Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw"
+          }
+        },
+        "cloud": {
+          "jkt": "kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM"
+        },
+        "action": {
+          "type": "git.commit",
+          "ref": "9f1c2ab",
+          "files": 3
+        },
+        "inputs": [
+          {
+            "kind": "prompt_bundle",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "outputs": [
+          {
+            "kind": "diff",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "gate": null,
+        "id": "rcpt_golden_2",
+        "seq": 2,
+        "prev": "d8f87b46c31c3416d83a1d7e3c8f6b0de6131502ca004a23f3c4583fe25fd2c0",
+        "node_sig": "zChgc-YHsaJRNQ7b2yLHMA0VWkjcG-ANlC_QlNUGxQkMmvRtFpgP5KCRrbwSyT47QFxZkf5lUGiQDlpmgsR8Cw",
+        "cloud_sig": "zdbfCw-aBrF4001hqYFxKS5XwnmTDIuNdKZqNFmLAmbJFS4PjpefuEm3YWgOlq9wBVqRk6L8Ph_QThEQ46GFAw"
+      },
+      "receipt_hash": "dd427094ef937d04b74742e1a03e59d18b339a58dfd7b6f1e745d129410fd110"
+    }
+  ],
+  "root": {
+    "document": {
+      "typ": "agie/root/1",
+      "date": "2026-09-04",
+      "size": 2,
+      "root": "e977068a01249959bd322a708a18df0135beebf66da6e854bb3a42c5e07fbca9",
+      "cloud": {
+        "jkt": "kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM"
+      },
+      "sig": "E2Nppk9zdAZCjzsnYZ_t1jZm3FsrkadMggxkK5t6jEDcb4RdWn0BWNoGM7hLQrTf8Qz68oBGhNLdbCxLpupaAQ"
+    },
+    "signing_input": "{\"date\":\"2026-09-04\",\"root\":\"e977068a01249959bd322a708a18df0135beebf66da6e854bb3a42c5e07fbca9\",\"size\":2,\"typ\":\"agie/root/1\"}",
+    "leaves": [
+      "{\"action\":{\"adapter\":\"claude-code\",\"type\":\"session.started\"},\"actor\":{\"jkt\":\"agent_golden\",\"level\":0,\"type\":\"agent\"},\"cloud\":{\"jkt\":\"kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\"},\"cloud_sig\":\"B8i4zVV80mhFPRyhkYM829s0_MfXRHjdEUOJN-H3PgDEkz_dcwWu2OnvxxYNuP7XmUAqPBKujJnqVAIPTWbPAQ\",\"company\":\"org_golden\",\"gate\":null,\"id\":\"rcpt_golden_1\",\"inputs\":[{\"kind\":\"prompt_bundle\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}],\"mission\":\"msn_1\",\"node\":{\"jkt\":\"Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\"},\"node_sig\":\"p9ZrlUVx60O_FQOGyitHzXsT16O0dT8O3d9tBsMg6at2zpAGkqD-YlcL7H34ZmtDrTiFHlChlrdZv5nLUa-ODw\",\"outputs\":[],\"prev\":null,\"run\":\"run_1\",\"seq\":1,\"task\":\"tsk_1\",\"ts\":\"2026-09-04T14:02:11Z\",\"typ\":\"agie/receipt/1\",\"v\":1}",
+      "{\"action\":{\"files\":3,\"ref\":\"9f1c2ab\",\"type\":\"git.commit\"},\"actor\":{\"jkt\":\"agent_golden\",\"level\":0,\"type\":\"agent\"},\"cloud\":{\"jkt\":\"kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\"},\"cloud_sig\":\"zdbfCw-aBrF4001hqYFxKS5XwnmTDIuNdKZqNFmLAmbJFS4PjpefuEm3YWgOlq9wBVqRk6L8Ph_QThEQ46GFAw\",\"company\":\"org_golden\",\"gate\":null,\"id\":\"rcpt_golden_2\",\"inputs\":[{\"kind\":\"prompt_bundle\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}],\"mission\":\"msn_1\",\"node\":{\"jkt\":\"Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"jwk\":{\"crv\":\"Ed25519\",\"kid\":\"Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"kty\":\"OKP\",\"x\":\"IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI\"}},\"node_sig\":\"zChgc-YHsaJRNQ7b2yLHMA0VWkjcG-ANlC_QlNUGxQkMmvRtFpgP5KCRrbwSyT47QFxZkf5lUGiQDlpmgsR8Cw\",\"outputs\":[{\"kind\":\"diff\",\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}],\"prev\":\"d8f87b46c31c3416d83a1d7e3c8f6b0de6131502ca004a23f3c4583fe25fd2c0\",\"run\":\"run_1\",\"seq\":2,\"task\":\"tsk_1\",\"ts\":\"2026-09-04T14:09:48Z\",\"typ\":\"agie/receipt/1\",\"v\":1}"
+    ]
+  },
+  "proof": {
+    "index": 1,
+    "size": 2,
+    "path": [
+      "826d5da364a808f21832fb5faf74e61ca350845c0d84131d1edfeb4a4fc630bb"
+    ]
+  }
+}
