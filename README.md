@@ -12,7 +12,7 @@ receipt with `agie verify` and nothing else.
 
 - `packages/receipts`: canonical JSON, keys, signatures, receipts, chains, Merkle roots
 - `packages/cli`: the `agie` command line, starting with `agie verify`
-- `docs/protocol`: the cloud-to-runtime protocol
+- `docs/protocol`: the cloud-to-runtime protocol and `golden-v0.json`, the interop vector
 
 ## Develop
 
@@ -35,5 +35,8 @@ agie verify receipt.json --jwks agie-jwks.json --chain mission-482.json --root 2
 ```
 
 Exit code 0 means every check passed, 1 means a check failed, 2 means the
-inputs could not be read. The protocol, including where the JWKS and daily
-roots are published, is in `docs/protocol/README.md`.
+inputs could not be read or a flag was wrong. The JWKS holds the cloud key,
+and the node key too unless the receipt carries it inline; either way keys are
+matched by RFC 7638 thumbprint and never by their `kid` label. The protocol,
+including where the JWKS and daily roots are published, is in
+`docs/protocol/README.md`.
