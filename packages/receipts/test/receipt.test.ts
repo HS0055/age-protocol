@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   generateKeyPair, nodeSign, cloudSign, receiptHash, verifyReceipt, thumbprint,
-  nodeSigningInput, cloudSigningInput,
+  nodeSigningInput, cloudSigningInput, RECEIPT_TYP,
   type ReceiptEnvelope, type Receipt,
 } from '../src/index.ts';
 
@@ -12,6 +12,7 @@ const stranger = generateKeyPair();
 
 function envelope(overrides: Partial<ReceiptEnvelope> = {}): ReceiptEnvelope {
   return {
+    typ: RECEIPT_TYP,
     v: 1,
     ts: '2026-09-04T14:02:11Z',
     company: 'org_sayge',
@@ -134,4 +135,41 @@ test('receiptHash is stable and changes with any field', () => {
   assert.match(h1, /^[0-9a-f]{64}$/);
   assert.equal(receiptHash({ ...r }), h1);
   assert.notEqual(receiptHash({ ...r, seq: 1208 }), h1);
+});
+
+test('the typ is part of the node signing input', () => {
+  const text = Buffer.from(nodeSigningInput(issue())).toString('utf8');
+  assert.equal(text.includes('"typ":"agie/receipt/1"'), true);
+});
+
+test('signing helpers reject an envelope whose typ is wrong', () => {
+  const wrong = { ...envelope(), typ: 'agie/root/1' } as unknown as ReceiptEnvelope;
+  assert.throws(() => nodeSign(wrong, node.privateJwk), /typ/);
+  assert.throws(() => cloudSign(wrong, assigned, cloud.privateJwk), /typ/);
+  const missing = { ...envelope() } as Partial<ReceiptEnvelope>;
+  delete missing.typ;
+  assert.throws(() => nodeSign(missing as ReceiptEnvelope, node.privateJwk), /typ/);
+});
+
+test('verifyReceipt rejects a missing or unexpected typ', () => {
+  const receipt = issue();
+  const keys = [node.publicJwk, cloud.publicJwk];
+  const missing = { ...receipt } as Partial<Receipt>;
+  delete missing.typ;
+  const withoutTyp = verifyReceipt(missing as Receipt, keys);
+  assert.equal(withoutTyp.ok, false);
+  assert.match(withoutTyp.errors[0] ?? '', /typ/);
+  const wrongTyp = verifyReceipt({ ...receipt, typ: 'agie/receipt/2' } as unknown as Receipt, keys);
+  assert.equal(wrongTyp.ok, false);
+  assert.match(wrongTyp.errors[0] ?? '', /typ/);
+});
+
+test('a node may carry its own public jwk', () => {
+  const receipt = cloudSign(
+    nodeSign(envelope({ node: { jkt: thumbprint(node.publicJwk), jwk: node.publicJwk } }), node.privateJwk),
+    assigned,
+    cloud.privateJwk,
+  );
+  assert.deepEqual(receipt.node?.jwk, node.publicJwk);
+  assert.deepEqual(verifyReceipt(receipt, [node.publicJwk, cloud.publicJwk]), { ok: true, node: 'valid', cloud: 'valid', errors: [] });
 });

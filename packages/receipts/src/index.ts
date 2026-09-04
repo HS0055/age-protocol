@@ -11,6 +11,8 @@ export {
 } from './keys.ts';
 export { signBytes, verifyBytes } from './signature.ts';
 export {
+  RECEIPT_TYP,
+  ROOT_TYP,
   nodeSign,
   cloudSign,
   receiptHash,
@@ -18,6 +20,7 @@ export {
   nodeSigningInput,
   cloudSigningInput,
   type ReceiptActor,
+  type ReceiptNode,
   type ReceiptArtifact,
   type ReceiptGate,
   type ReceiptEnvelope,

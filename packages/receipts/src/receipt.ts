@@ -3,6 +3,11 @@ import { canonicalBytes } from './canonical.ts';
 import { thumbprint, type PrivateJwk, type PublicJwk } from './keys.ts';
 import { signBytes, verifyBytes } from './signature.ts';
 
+// Domain separation: every signed AGIE document names its own type, so a
+// signature over one structure can never be replayed as another.
+export const RECEIPT_TYP = 'agie/receipt/1';
+export const ROOT_TYP = 'agie/root/1';
+
 export interface ReceiptActor {
   type: 'agent' | 'human' | 'system';
   jkt?: string;
@@ -16,6 +21,13 @@ export interface ReceiptArtifact {
   path_hashes?: string[];
 }
 
+// jwk is optional and self-certifying: a verifier accepts it only when its
+// RFC 7638 thumbprint equals jkt.
+export interface ReceiptNode {
+  jkt: string;
+  jwk?: PublicJwk;
+}
+
 export interface ReceiptGate {
   id: string;
   class: string;
@@ -27,6 +39,7 @@ export interface ReceiptGate {
 // What the node builds and signs. The cloud assigns id, seq, and prev when it
 // stores the receipt, so those three are not part of the node signing input.
 export interface ReceiptEnvelope {
+  typ: typeof RECEIPT_TYP;
   v: 1;
   ts: string;
   company: string;
@@ -34,7 +47,7 @@ export interface ReceiptEnvelope {
   task: string | null;
   run: string | null;
   actor: ReceiptActor;
-  node: { jkt: string } | null;
+  node: ReceiptNode | null;
   cloud: { jkt: string };
   action: { type: string } & Record<string, unknown>;
   inputs: ReceiptArtifact[];
@@ -85,7 +98,14 @@ export function cloudSigningInput(body: ReceiptBody & { node_sig?: string | null
   return canonicalBytes({ ...rest, node_sig: body.node_sig ?? null });
 }
 
+function assertReceiptTyp(envelope: ReceiptEnvelope, caller: string): void {
+  if (envelope.typ !== RECEIPT_TYP) {
+    throw new Error(`${caller}: envelope typ must be ${RECEIPT_TYP}`);
+  }
+}
+
 export function nodeSign(envelope: ReceiptEnvelope, nodePrivate: PrivateJwk): NodeSignedEnvelope {
+  assertReceiptTyp(envelope, 'nodeSign');
   if (!envelope.node) throw new Error('nodeSign: envelope has no node');
   const clean = envelopeOf(envelope);
   return { ...clean, node_sig: signBytes(canonicalBytes(clean), nodePrivate) };
@@ -96,6 +116,7 @@ export function cloudSign(
   assigned: CloudAssigned,
   cloudPrivate: PrivateJwk,
 ): Receipt {
+  assertReceiptTyp(envelope, 'cloudSign');
   const node_sig = 'node_sig' in envelope ? envelope.node_sig ?? null : null;
   const body = { ...envelopeOf(envelope), id: assigned.id, seq: assigned.seq, prev: assigned.prev, node_sig };
   return { ...body, cloud_sig: signBytes(cloudSigningInput(body), cloudPrivate) };
@@ -112,6 +133,15 @@ function findKey(keys: PublicJwk[], jkt: string): PublicJwk | undefined {
 export function verifyReceipt(receipt: Receipt, keys: PublicJwk[]): VerifyReceiptResult {
   const errors: string[] = [];
   let node: VerifyReceiptResult['node'];
+
+  if (receipt.typ !== RECEIPT_TYP) {
+    return {
+      ok: false,
+      node: 'invalid',
+      cloud: 'invalid',
+      errors: [`receipt typ ${String(receipt.typ)} is not ${RECEIPT_TYP}`],
+    };
+  }
 
   if (receipt.node === null) {
     if (receipt.node_sig !== null) {

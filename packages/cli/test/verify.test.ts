@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   generateKeyPair, nodeSign, cloudSign, receiptHash, canonicalBytes, merkleRoot, inclusionProof, signBytes, thumbprint,
+  RECEIPT_TYP, ROOT_TYP,
   type ReceiptEnvelope, type Receipt,
 } from '@agie/receipts';
 import { runVerify } from '../src/verify.ts';
@@ -11,7 +12,7 @@ const cloud = generateKeyPair();
 
 function envelope(seq: number): ReceiptEnvelope {
   return {
-    v: 1, ts: '2026-09-04T00:00:00Z', company: 'org', mission: 'msn_1', task: 'tsk_1', run: 'run_1',
+    typ: RECEIPT_TYP, v: 1, ts: '2026-09-04T00:00:00Z', company: 'org', mission: 'msn_1', task: 'tsk_1', run: 'run_1',
     actor: { type: 'agent', jkt: 'agent', level: 0 }, node: { jkt: thumbprint(node.publicJwk) }, cloud: { jkt: thumbprint(cloud.publicJwk) },
     action: { type: 'git.commit' }, inputs: [], outputs: [], gate: null,
   };
@@ -25,8 +26,11 @@ const r1 = issue(1, null);
 const r2 = issue(2, receiptHash(r1));
 const leaves = [r1, r2].map((r) => canonicalBytes(r));
 const rootHex = merkleRoot(leaves).toString('hex');
-const rootDoc = { date: '2026-09-04', size: 2, root: rootHex, cloud: { jkt: thumbprint(cloud.publicJwk) }, sig: '' };
-rootDoc.sig = signBytes(canonicalBytes({ date: rootDoc.date, size: rootDoc.size, root: rootDoc.root }), cloud.privateJwk);
+const rootDoc = { typ: ROOT_TYP, date: '2026-09-04', size: 2, root: rootHex, cloud: { jkt: thumbprint(cloud.publicJwk) }, sig: '' };
+rootDoc.sig = signBytes(
+  canonicalBytes({ typ: rootDoc.typ, date: rootDoc.date, size: rootDoc.size, root: rootDoc.root }),
+  cloud.privateJwk,
+);
 
 function files(extra: Record<string, unknown> = {}) {
   const store: Record<string, string> = {
@@ -88,8 +92,16 @@ test('fails when the root signature is wrong', async () => {
   assert.ok(err.some((line) => /root signature/.test(line)));
 });
 
+test('a root document with the wrong typ fails', async () => {
+  const { io, out, err } = files({ 'root.json': { ...rootDoc, typ: 'agie/receipt/1' } });
+  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
+  assert.equal(code, 1);
+  assert.ok(out.includes('root     invalid'));
+  assert.ok(err.some((line) => /typ/.test(line)));
+});
+
 test('malformed root file without cloud exits 2', async () => {
-  const { io, err } = files({ 'root.json': { date: rootDoc.date, size: rootDoc.size, root: rootDoc.root, sig: rootDoc.sig } });
+  const { io, err } = files({ 'root.json': { typ: rootDoc.typ, date: rootDoc.date, size: rootDoc.size, root: rootDoc.root, sig: rootDoc.sig } });
   const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
   assert.equal(code, 2);
   assert.ok(err.some((line) => /root file/.test(line)));

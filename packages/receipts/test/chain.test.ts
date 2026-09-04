@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPair, cloudSign, receiptHash, verifyChain, thumbprint, type ReceiptEnvelope, type Receipt } from '../src/index.ts';
+import { generateKeyPair, cloudSign, receiptHash, verifyChain, thumbprint, RECEIPT_TYP, type ReceiptEnvelope, type Receipt } from '../src/index.ts';
 
 const cloud = generateKeyPair();
 
 function make(seq: number, prev: string | null, mission = 'msn_1'): Receipt {
   const envelope: ReceiptEnvelope = {
-    v: 1, ts: '2026-09-04T00:00:00Z', company: 'org', mission, task: null, run: null,
+    typ: RECEIPT_TYP, v: 1, ts: '2026-09-04T00:00:00Z', company: 'org', mission, task: null, run: null,
     actor: { type: 'system' }, node: null, cloud: { jkt: thumbprint(cloud.publicJwk) },
     action: { type: 'mission.event' }, inputs: [], outputs: [], gate: null,
   };

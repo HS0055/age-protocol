@@ -1,5 +1,5 @@
 import {
-  canonicalBytes, verifyBytes, verifyChain, verifyInclusion, verifyReceipt,
+  canonicalBytes, verifyBytes, verifyChain, verifyInclusion, verifyReceipt, ROOT_TYP,
   type InclusionProof, type PublicJwk, type Receipt,
 } from '@agie/receipts';
 
@@ -44,6 +44,7 @@ async function readJson<T>(io: VerifyIo, path: string): Promise<T> {
 }
 
 interface RootDoc {
+  typ: string;
   date: string;
   size: number;
   root: string;
@@ -112,8 +113,12 @@ export async function runVerify(args: string[], io: VerifyIo): Promise<number> {
 
   if (root && proof) {
     const cloudKey = keys.find((key) => key.kid === root.cloud.jkt);
-    const rootBytes = canonicalBytes({ date: root.date, size: root.size, root: root.root });
-    if (!cloudKey) {
+    const rootBytes = canonicalBytes({ typ: ROOT_TYP, date: root.date, size: root.size, root: root.root });
+    if (root.typ !== ROOT_TYP) {
+      io.stderr(`root document typ ${String(root.typ)} is not ${ROOT_TYP}`);
+      io.stdout('root     invalid');
+      failed = true;
+    } else if (!cloudKey) {
       io.stderr(`root cloud key ${root.cloud.jkt} not in key set`);
       io.stdout('root     unknown_key');
       failed = true;
