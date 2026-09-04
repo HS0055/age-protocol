@@ -9,3 +9,4 @@ export {
   type PublicJwk,
   type PrivateJwk,
 } from './keys.ts';
+export { signBytes, verifyBytes } from './signature.ts';
