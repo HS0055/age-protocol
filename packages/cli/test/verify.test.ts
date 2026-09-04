@@ -223,3 +223,31 @@ test('an exception in the verification phase is reported, not thrown', async () 
   assert.equal(code, 2);
   assert.ok(err.some((line) => /internal error: boom/.test(line)), err.join('|'));
 });
+
+test('chain mode verifies the signatures of every receipt, not just the last', async () => {
+  const broken = { ...r1, cloud_sig: 'A'.repeat(86) } as Receipt;
+  const next = issue(2, receiptHash(broken));
+  const { io, out, err } = files({ 'receipt.json': next, 'chain.json': [broken, next] });
+  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--chain', 'chain.json'], io);
+  assert.equal(code, 1);
+  assert.ok(out.includes('chain    invalid'), out.join('|'));
+  assert.ok(err.some((line) => /chain receipt 0/.test(line)), err.join('|'));
+});
+
+test('chain mode reports an earlier receipt signed by an unknown key', async () => {
+  const stranger = generateKeyPair();
+  const strange = cloudSign(nodeSign(envelope(1), node.privateJwk), { id: 'rcpt_1', seq: 1, prev: null }, stranger.privateJwk);
+  const next = issue(2, receiptHash(strange));
+  const { io, out } = files({ 'receipt.json': next, 'chain.json': [strange, next] });
+  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--chain', 'chain.json'], io);
+  assert.equal(code, 1);
+  assert.ok(out.includes('chain    invalid'), out.join('|'));
+});
+
+test('a proof whose size differs from the root document fails', async () => {
+  const { io, out, err } = files({ 'proof.json': { ...inclusionProof(leaves, 1), size: 3 } });
+  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
+  assert.equal(code, 1);
+  assert.ok(out.includes('root     size mismatch'), out.join('|'));
+  assert.ok(err.some((line) => /size/.test(line)), err.join('|'));
+});

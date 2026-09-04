@@ -191,9 +191,17 @@ function runChecks(parsed: ParsedArgs, inputs: Inputs, io: VerifyIo): number {
       failed = true;
     } else {
       const result = verifyChain(chain);
-      io.stdout(result.ok ? `chain    valid (${result.length} receipts)` : 'chain    invalid');
       for (const error of result.errors) io.stderr(error);
-      if (!result.ok) failed = true;
+      let signaturesOk = true;
+      for (let i = 0; i < chain.length; i += 1) {
+        const signed = verifyReceipt(chain[i] as Receipt, byThumbprint);
+        if (signed.ok) continue;
+        signaturesOk = false;
+        for (const error of signed.errors) io.stderr(`chain receipt ${i}: ${error}`);
+      }
+      const chainOk = result.ok && signaturesOk;
+      io.stdout(chainOk ? `chain    valid (${result.length} receipts)` : 'chain    invalid');
+      if (!chainOk) failed = true;
     }
   } else {
     io.stdout('chain    skipped');
@@ -206,6 +214,10 @@ function runChecks(parsed: ParsedArgs, inputs: Inputs, io: VerifyIo): number {
     if (root.typ !== ROOT_TYP) {
       io.stderr(`root document typ ${root.typ} is not ${ROOT_TYP}`);
       io.stdout('root     invalid');
+      failed = true;
+    } else if (proof.size !== root.size) {
+      io.stderr(`proof size ${proof.size} does not match root size ${root.size}`);
+      io.stdout('root     size mismatch');
       failed = true;
     } else if (!cloudKey) {
       io.stderr(`root cloud key ${root.cloud.jkt} not in key set`);
