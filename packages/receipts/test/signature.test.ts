@@ -29,3 +29,14 @@ test('verifyBytes returns false instead of throwing on garbage', () => {
   assert.equal(verifyBytes(data, 'not-a-signature', publicJwk), false);
   assert.equal(verifyBytes(data, '', publicJwk), false);
 });
+
+test('verifyBytes accepts only unpadded base64url of the right length', () => {
+  const { publicJwk, privateJwk } = generateKeyPair();
+  const sig = signBytes(data, privateJwk);
+  const standard = Buffer.from(sig, 'base64url').toString('base64');
+  assert.equal(verifyBytes(data, sig, publicJwk), true);
+  assert.equal(verifyBytes(data, `${sig}==`, publicJwk), false);
+  assert.equal(verifyBytes(data, standard, publicJwk), false);
+  assert.equal(verifyBytes(data, `${sig}trailing`, publicJwk), false);
+  assert.equal(verifyBytes(data, sig.slice(0, 85), publicJwk), false);
+});
