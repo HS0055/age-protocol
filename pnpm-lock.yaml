@@ -15,6 +15,12 @@ importers:
         specifier: ^5.8.0
         version: 5.9.3
 
+  packages/cli:
+    dependencies:
+      '@agie/receipts':
+        specifier: workspace:*
+        version: link:../receipts
+
   packages/receipts: {}
 
 packages:
