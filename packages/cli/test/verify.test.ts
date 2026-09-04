@@ -84,6 +84,13 @@ test('fails when the root signature is wrong', async () => {
   assert.ok(err.some((line) => /root signature/.test(line)));
 });
 
+test('malformed root file without cloud exits 2', async () => {
+  const { io, err } = files({ 'root.json': { date: rootDoc.date, size: rootDoc.size, root: rootDoc.root, sig: rootDoc.sig } });
+  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
+  assert.equal(code, 2);
+  assert.ok(err.some((line) => /root file/.test(line)));
+});
+
 test('usage errors exit 2', async () => {
   const { io, err } = files();
   assert.equal(await runVerify([], io), 2);

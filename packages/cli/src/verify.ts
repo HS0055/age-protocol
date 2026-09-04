@@ -69,7 +69,16 @@ export async function runVerify(args: string[], io: VerifyIo): Promise<number> {
     keys = (await readJson<{ keys: PublicJwk[] }>(io, parsed.jwks)).keys;
     if (!Array.isArray(keys)) throw new Error('jwks file has no keys array');
     if (parsed.chain) chain = await readJson<Receipt[]>(io, parsed.chain);
-    if (parsed.root) root = await readJson<RootDoc>(io, parsed.root);
+    if (parsed.root) {
+      root = await readJson<RootDoc>(io, parsed.root);
+      if (
+        typeof root !== 'object' || root === null ||
+        typeof root.cloud !== 'object' || root.cloud === null ||
+        typeof root.cloud.jkt !== 'string'
+      ) {
+        throw new Error('root file has no cloud.jkt');
+      }
+    }
     if (parsed.proof) proof = await readJson<InclusionProof>(io, parsed.proof);
   } catch (error) {
     io.stderr(`cannot read input: ${(error as Error).message}`);
