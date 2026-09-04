@@ -27,3 +27,4 @@ export {
   type VerifyReceiptResult,
 } from './receipt.ts';
 export { verifyChain, type VerifyChainResult } from './chain.ts';
+export { leafHash, merkleRoot, inclusionProof, verifyInclusion, type InclusionProof } from './merkle.ts';
