@@ -47,11 +47,10 @@ export function toPublicJwk(jwk: PrivateJwk): PublicJwk {
 }
 
 export function generateKeyPair(): { publicJwk: PublicJwk; privateJwk: PrivateJwk } {
-  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const { privateKey } = generateKeyPairSync('ed25519');
   const exported = privateKey.export({ format: 'jwk' }) as { kty: string; crv: string; x: string; d: string };
   const privateJwk: PrivateJwk = { kty: 'OKP', crv: 'Ed25519', x: exported.x, d: exported.d };
   const publicJwk = withKid({ kty: 'OKP', crv: 'Ed25519', x: exported.x });
-  void publicKey;
   return { publicJwk, privateJwk };
 }
 

@@ -206,3 +206,16 @@ test('verifyReceipt accepts a prebuilt key map', () => {
   const map = keyMapFromJwks([node.publicJwk, cloud.publicJwk]);
   assert.equal(verifyReceipt(issue(), map).ok, true);
 });
+
+test('an envelope carrying an undefined node_sig is signed as node_sig null', () => {
+  const carrier = { ...envelope({ node: null }), node_sig: undefined } as unknown as ReceiptEnvelope;
+  const receipt = cloudSign(carrier, assigned, cloud.privateJwk);
+  assert.equal(receipt.node_sig, null);
+  assert.deepEqual(verifyReceipt(receipt, [cloud.publicJwk]), { ok: true, node: 'absent', cloud: 'valid', errors: [] });
+});
+
+test('a receipt with no node and an undefined node_sig counts as absent', () => {
+  const receipt = cloudSign(envelope({ node: null }), assigned, cloud.privateJwk);
+  const dropped = { ...receipt, node_sig: undefined } as unknown as Receipt;
+  assert.deepEqual(verifyReceipt(dropped, [cloud.publicJwk]), { ok: true, node: 'absent', cloud: 'valid', errors: [] });
+});

@@ -151,7 +151,8 @@ export function verifyReceipt(
   }
 
   if (receipt.node === null) {
-    if (receipt.node_sig !== null) {
+    // A missing member and an explicit null both mean no node signature.
+    if (receipt.node_sig !== null && receipt.node_sig !== undefined) {
       errors.push('node_sig present but receipt has no node');
       node = 'invalid';
     } else {
