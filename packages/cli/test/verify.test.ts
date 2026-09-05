@@ -233,3 +233,31 @@ test('an unknown signature role does not make the CLI reject the file', async ()
   assert.equal(code, 0, out.join('\n'));
   assert.match(out.join('\n'), /- Runtime signature\s+unknown role, not checked/);
 });
+
+test('a malformed receipt reaches the commit check without raising', async () => {
+  // commit_binding runs alongside verifyReceipt rather than after it, so it
+  // sees receipts whose shape has already failed. A null inside outputs used
+  // to throw here, and the CLI printed "internal error" instead of a verdict.
+  // The specification requires an answer for any input.
+  const shapes: [string, (r: Record<string, unknown>) => void][] = [
+    ['outputs holds null', (r) => { r.outputs = [null]; }],
+    ['outputs holds a number', (r) => { r.outputs = [42]; }],
+    ['outputs is an object', (r) => { r.outputs = { kind: 'commit' }; }],
+    ['outputs is absent', (r) => { delete r.outputs; }],
+    ['action is null', (r) => { r.action = null; }],
+    ['action is a number', (r) => { r.action = 42; }],
+    ['action is absent', (r) => { delete r.action; }],
+    ['action.type is not a string', (r) => { (r.action as Record<string, unknown>).type = 7; }],
+    ['commit is null', (r) => { (r.action as Record<string, unknown>).commit = null; }],
+  ];
+
+  for (const [label, mutate] of shapes) {
+    const broken = JSON.parse(JSON.stringify(receipt)) as Record<string, unknown>;
+    mutate(broken);
+    const { io, out, err } = harness({ 'broken.json': broken });
+    const code = await runVerify(['broken.json', '--jwks', 'jwks.json'], io);
+    const printed = [...out, ...err].join('\n');
+    assert.doesNotMatch(printed, /internal error/, `${label} produced an internal error`);
+    assert.notEqual(code, 0, `${label} must not verify`);
+  }
+});

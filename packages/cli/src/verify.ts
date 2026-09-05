@@ -194,15 +194,23 @@ async function readInputs(parsed: ParsedArgs, io: VerifyIo): Promise<Inputs> {
   return inputs;
 }
 
+// Everything here is read defensively. This check runs alongside
+// verifyReceipt rather than after it, so it sees receipts whose shape has
+// already failed, and the specification requires a verdict for any input
+// rather than an exception. A null in outputs used to throw here.
 async function commitBinding(receipt: Receipt, repo: string | undefined, io: VerifyIo): Promise<Check> {
   const name = 'commit_binding';
-  const type = receipt.action.type;
-  if (type !== 'git.commit') return { name, status: 'skip', detail: `action ${type} is not a commit` };
-  const commit = receipt.action.commit;
+  const action: unknown = (receipt as { action?: unknown }).action;
+  if (!isObject(action)) return { name, status: 'skip', detail: 'action is not an object' };
+  const type = action.type;
+  if (type !== 'git.commit') return { name, status: 'skip', detail: `action ${typeof type === 'string' ? type.slice(0, 40) : JSON.stringify(type)} is not a commit` };
+  const commit = action.commit;
   if (typeof commit !== 'string' || !COMMIT_HASH.test(commit)) return { name, status: 'fail', detail: 'commit hash missing or malformed' };
-  const listed = receipt.outputs.some((output) => output.kind === 'commit' && output.ref === commit);
+  const outputs: unknown = (receipt as { outputs?: unknown }).outputs;
+  const listed = Array.isArray(outputs)
+    && outputs.some((output) => isObject(output) && output.kind === 'commit' && output.ref === commit);
   if (!listed) return { name, status: 'fail', detail: 'commit is not among the outputs' };
-  const files = receipt.action.files_changed;
+  const files = action.files_changed;
   const suffix = Number.isInteger(files) ? ` (${String(files)} files)` : '';
   if (repo !== undefined) {
     const exists = await io.gitCommitExists(repo, commit);
