@@ -5,12 +5,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   verifyReceipt, canonicalBytes, sha256Digest, signBytes, bareJwk, agentIdOf,
-  verifyRoot, verifyRootInclusion, keyMapFromJwks,
+  verifyRoot, verifyRootInclusion, keyMapFromJwks, registrySigningInput, leafHash,
   type PrivateJwk, type PublicJwk, type Receipt, type ReceiptCore,
 } from '../src/index.ts';
 
 interface GoldenVector {
-  keys: { agent_private: PrivateJwk; agent_public: PublicJwk; registry_public: PublicJwk };
+  keys: { agent_private: PrivateJwk; agent_public: PublicJwk; registry_public: PublicJwk; registry_private: PrivateJwk };
   receipts: { core: ReceiptCore; receipt: Receipt; proof: Record<string, unknown> }[];
   root: { document: Record<string, unknown> };
 }
@@ -488,5 +488,69 @@ test('the two implementations agree on integers written as floats', when, () => 
     const parsed = JSON.parse(spliced) as Receipt;
     assert.equal(verifyReceipt(parsed, keys).ok, false, `${literal} is not an integer`);
     assert.equal(runReceiptText(spliced).status, 1, `the two disagree on the literal ${literal}`);
+  }
+});
+
+// The value-not-spelling rule and the safe-integer bound have to reach the
+// five numbers a root verdict reads, not just the receipt core. A release
+// review found both missing there: one helper rejected every float, and had
+// no upper bound at all, so 2**60 passed in Python where the reference
+// rejects it as beyond the safe range. That second one verified a root the
+// reference refuses, which is a false positive.
+test('the two implementations agree on root and proof numbers', when, () => {
+  const vector = JSON.parse(readFileSync(VECTOR, 'utf8')) as GoldenVector;
+  const registryKeys = keyMapFromJwks([vector.keys.registry_public]);
+  const item = vector.receipts[0] as GoldenVector['receipts'][number];
+  const doc = vector.root.document;
+  const proof = item.proof;
+
+  const both = (d: unknown, p: unknown, label: string) => {
+    const reference = verifyRoot(d as never, registryKeys)
+      && verifyRootInclusion(item.receipt, p as never, d as never);
+    const result = runRoot(item.receipt, d, p);
+    assert.doesNotMatch(result.stdout + result.stderr, /Traceback/, `raised on ${label}`);
+    assert.equal(result.stdout.trim() === 'INCLUDED', reference, `the two disagree on ${label}`);
+  };
+
+  both(doc, proof, 'the genuine pair');
+
+  // Beyond the safe integer range. An incoherent case is rejected by both for
+  // other reasons, so it proves nothing: the triple has to be honest, with a
+  // registered receipt, a validly signed root, and a proof that lines up, so
+  // that only the range rule can decide it. Python integers are arbitrary
+  // precision, so 2**60 is an ordinary int there and out of range here.
+  for (const huge of [2 ** 60, 2 ** 53, Number.MAX_SAFE_INTEGER + 2]) {
+    const registered = JSON.parse(JSON.stringify(item.receipt)) as Receipt;
+    const entry = registered.signatures[1] as { signer: string; sequence: number; registered_at: string; signature: string };
+    const fields = { sequence: huge, registered_at: entry.registered_at, signer: entry.signer };
+    registered.signatures[1] = {
+      ...entry, sequence: huge,
+      signature: signBytes(registrySigningInput(registered, fields), vector.keys.registry_private),
+    } as never;
+
+    const unsigned = {
+      root_version: '0.1', registry: entry.signer, date: '2026-09-05',
+      sequence_start: huge, sequence_end: huge,
+      root: `sha256:${Buffer.from(leafHash(canonicalBytes(registered))).toString('hex')}`,
+    };
+    const honest = { ...unsigned, signature: signBytes(canonicalBytes(unsigned), vector.keys.registry_private) };
+    const claim = { sequence: huge, index: 0, size: 1, path: [] as string[] };
+
+    // The root is genuinely signed and the arithmetic genuinely lines up, so
+    // a verifier without the range rule reports this included.
+    assert.equal(verifyRoot(honest as never, registryKeys), true, `the root at ${huge} is properly signed`);
+    assert.equal(verifyRootInclusion(registered, claim as never, honest as never), false,
+      `a sequence of ${huge} is beyond the safe range and must be rejected`);
+    const result = runRoot(registered, honest, claim);
+    assert.equal(result.stdout.trim(), 'NOT', `verify.py accepted an out-of-range root at ${huge}`);
+
+    both(doc, { ...proof, size: huge }, `proof.size ${huge}`);
+    both(doc, { ...proof, index: huge }, `proof.index ${huge}`);
+  }
+
+  // Non-integral values must be refused wherever an integer is read.
+  for (const bad of [1.5, -0.5, 2.25]) {
+    both({ ...doc, sequence_start: bad }, proof, `sequence_start ${bad}`);
+    both(doc, { ...proof, index: bad }, `proof.index ${bad}`);
   }
 });

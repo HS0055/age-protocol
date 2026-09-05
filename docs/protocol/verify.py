@@ -234,14 +234,31 @@ def merkle_root(leaves):
     return node_hash(merkle_root(leaves[:k]), merkle_root(leaves[k:]))
 
 def json_int(value):
-    """A JSON integer, or None. Rejects bool, which Python counts as an int.
+    """A JSON integer within the safe range, or None.
 
-    JSON has no boolean-as-number, but Python evaluates False == 0, so an
-    index of false would otherwise be read as index 0 and an inclusion proof
-    for position 0 would verify. Every integer read out of untrusted JSON goes
-    through here.
+    Three traps, all of which produced real disagreements with the reference:
+
+    Booleans. JSON has no boolean-as-number, but Python evaluates False == 0,
+    so an index of false would be read as position 0 and an inclusion proof
+    for that position would verify.
+
+    Spelling. RFC 8785 handles numbers as IEEE 754 doubles, so 3.0 and 3 are
+    the same number. Rejecting the float type rather than the non-integral
+    value disagreed with a reference that only ever sees a double.
+
+    Range. Python integers are arbitrary precision, so 2**60 is a perfectly
+    good int here while the reference rejects it as beyond the safe range.
+    Accepting it would verify a root the reference refuses, which is a false
+    positive on this side.
+
+    Every integer read out of untrusted JSON goes through here.
     """
-    if isinstance(value, bool) or not isinstance(value, int): return None
+    if isinstance(value, bool): return None
+    if isinstance(value, float):
+        if not value.is_integer(): return None
+        value = int(value)
+    if not isinstance(value, int): return None
+    if abs(value) > MAX_SAFE: return None
     return value
 
 HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")

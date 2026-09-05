@@ -202,6 +202,16 @@ test('an inclusion proof path is bare lowercase hex, and uppercase is not the sa
 
   const upper = { ...proof, path: proof.path.map((entry) => entry.toUpperCase()) };
   assert.equal(verifyRootInclusion(six, upper, doc), false, 'uppercase hex is not accepted');
-  const mixed = { ...proof, path: proof.path.map((entry) => `${entry.slice(0, 1).toUpperCase()}${entry.slice(1)}`) };
+  // Uppercase the first letter, not the first character: about 62% of hex
+  // strings start with a digit, where toUpperCase is a no-op and the "mixed
+  // case" proof would be byte-identical to the genuine one. That made this
+  // test pass or fail depending on freshly generated keys.
+  const upperFirstLetter = (entry: string) => {
+    const at = entry.search(/[a-f]/);
+    assert.notEqual(at, -1, 'a 64-character hex digest contains at least one letter');
+    return `${entry.slice(0, at)}${entry[at]?.toUpperCase()}${entry.slice(at + 1)}`;
+  };
+  const mixed = { ...proof, path: proof.path.map(upperFirstLetter) };
+  assert.notDeepEqual(mixed.path, proof.path, 'the mixed-case proof must actually differ');
   assert.equal(verifyRootInclusion(six, mixed, doc), false, 'mixed case is not accepted either');
 });
