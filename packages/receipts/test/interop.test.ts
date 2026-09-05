@@ -3,6 +3,15 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  verifyReceipt, canonicalBytes, sha256Digest, signBytes, bareJwk, agentIdOf,
+  type PrivateJwk, type PublicJwk, type Receipt, type ReceiptCore,
+} from '../src/index.ts';
+
+interface GoldenVector {
+  keys: { agent_private: PrivateJwk; agent_public: PublicJwk; registry_public: PublicJwk };
+  receipts: { core: ReceiptCore; receipt: Receipt }[];
+}
 
 // docs/protocol/verify.py is a second implementation of verification: another
 // language, another crypto library, its own canonicalizer, written from the
@@ -59,3 +68,70 @@ test('a second implementation rejects the same tampering this one does', when, (
   assert.equal(recomputed.status, 1);
   assert.match(recomputed.stdout, /Agent signature/);
 });
+
+// The test that matters most. Agreeing on a valid receipt is easy; the whole
+// point of a second implementation is that it agrees on the INVALID ones too.
+// A verifier that accepts a receipt the reference rejects is worse than no
+// second implementation at all, because it turns a claim of interoperability
+// into a false one. This caught exactly that: verify.py had no shape
+// validation and passed a receipt with no timestamp.
+test('the two implementations agree on malformed receipts, not just good ones', when, () => {
+  const vector = JSON.parse(readFileSync(VECTOR, 'utf8')) as GoldenVector;
+  const keys = { registryKeys: [vector.keys.registry_public] };
+  const item = vector.receipts[0] as GoldenVector['receipts'][number];
+
+  // Each mutation produces a receipt that is signed consistently but wrong in
+  // one specific way, so a verifier without that rule reports it verified.
+  const mutations: [string, (core: Record<string, unknown>) => void][] = [
+    ['no timestamp', (c) => { delete c.timestamp; }],
+    ['timestamp is a number', (c) => { c.timestamp = 1757000000; }],
+    ['no action', (c) => { delete c.action; }],
+    ['action.type is not a string', (c) => { (c.action as Record<string, unknown>).type = 7; }],
+    ['no task', (c) => { delete c.task; }],
+    ['task is a string', (c) => { c.task = 'fix the bug'; }],
+    ['inputs is an object', (c) => { c.inputs = { kind: 'prompt' }; }],
+    ['an input has no digest', (c) => { c.inputs = [{ kind: 'prompt' }]; }],
+    ['outputs is missing', (c) => { delete c.outputs; }],
+    ['environment is null', (c) => { c.environment = null; }],
+    ['policy is a string', (c) => { c.policy = 'default'; }],
+    ['agent is not an age:agent: id', (c) => { c.agent = 'someone'; }],
+    ['agent id has an empty thumbprint', (c) => { c.agent = 'age:agent:'; }],
+    ['receipt_version is 0.2', (c) => { c.receipt_version = '0.2'; }],
+    ['a fractional number', (c) => { (c.action as Record<string, unknown>).ratio = 1.5; }],
+    ['a number past the safe range', (c) => { (c.action as Record<string, unknown>).n = 1e21; }],
+    ['a fraction inside an input', (c) => { c.inputs = [{ kind: 'prompt', digest: `sha256:${'aa'.repeat(32)}`, size: 0.5 }]; }],
+  ];
+
+  for (const [label, mutate] of mutations) {
+    const core = JSON.parse(JSON.stringify(item.core)) as Record<string, unknown>;
+    mutate(core);
+    // Sign it properly, so only the rule under test can reject it.
+    const bytes = canonicalBytes(core);
+    const receipt = {
+      ...core,
+      id: sha256Digest(bytes),
+      signatures: [{
+        role: 'agent',
+        signer: agentIdOf(bareJwk(vector.keys.agent_public)),
+        alg: 'Ed25519',
+        key: bareJwk(vector.keys.agent_public),
+        signature: signBytes(bytes, vector.keys.agent_private),
+      }],
+    } as unknown as Receipt;
+
+    const reference = verifyReceipt(receipt, keys).ok;
+    const second = run(JSON.stringify(receipt)).status === 0;
+    assert.equal(reference, false, `the reference should reject: ${label}`);
+    assert.equal(second, reference, `the two implementations disagree on: ${label}`);
+  }
+});
+
+test('the two implementations agree that a padded signature is not a signature', when, () => {
+  const vector = JSON.parse(readFileSync(VECTOR, 'utf8')) as GoldenVector;
+  const receipt = JSON.parse(JSON.stringify(vector.receipts[0]?.receipt)) as Receipt;
+  const entry = receipt.signatures[0] as { signature: string };
+  entry.signature = `${entry.signature}=`;
+  assert.equal(verifyReceipt(receipt, { registryKeys: [vector.keys.registry_public] }).ok, false);
+  assert.equal(run(JSON.stringify(receipt)).status, 1);
+});
+

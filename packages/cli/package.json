@@ -21,5 +21,17 @@
   "files": [
     "bin",
     "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "age",
+    "age-protocol",
+    "agectl",
+    "receipts",
+    "verification",
+    "ed25519",
+    "ai-agents"
   ]
 }

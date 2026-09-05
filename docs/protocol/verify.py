@@ -18,7 +18,7 @@ Exit status is 0 when everything verified and 1 when anything failed. The one
 dependency is `cryptography`, for Ed25519; the Python standard library has no
 Ed25519 implementation.
 """
-import base64, hashlib, json, sys
+import base64, hashlib, json, re, sys
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.exceptions import InvalidSignature
 
@@ -90,12 +90,77 @@ def thumbprint(jwk: dict) -> str:
     required = {"crv": jwk["crv"], "kty": jwk["kty"], "x": jwk["x"]}
     return b64u_encode(hashlib.sha256(canonical(required)).digest())
 
+SIGNATURE = re.compile(r"\A[A-Za-z0-9_-]{86}\Z")
+
 def ed25519_verify(jwk: dict, sig_b64u: str, message: bytes) -> bool:
+    # Exactly 86 unpadded base64url characters. Decoding leniently would
+    # accept a padded spelling this implementation's counterpart rejects, and
+    # two verifiers that disagree about which receipts are valid are worse
+    # than one verifier.
+    if not isinstance(sig_b64u, str) or not SIGNATURE.match(sig_b64u):
+        return False
+    if not isinstance(jwk, dict) or not isinstance(jwk.get("x"), str):
+        return False
     try:
         Ed25519PublicKey.from_public_bytes(b64u_decode(jwk["x"])).verify(b64u_decode(sig_b64u), message)
         return True
     except (InvalidSignature, ValueError):
         return False
+
+RECEIPT_ID = re.compile(r"\Asha256:[0-9a-f]{64}\Z")
+MAX_SAFE = 9007199254740991
+
+def artifacts_problem(value, member: str):
+    if not isinstance(value, list): return f"{member} must be an array"
+    for i, item in enumerate(value):
+        if not isinstance(item, dict) or not isinstance(item.get("kind"), str) or not isinstance(item.get("digest"), str):
+            return f"{member} entry {i} must be an object with a string kind and digest"
+    return None
+
+def number_problem(value, path=""):
+    """A core carries only integers of magnitude at most 2**53 - 1."""
+    if isinstance(value, bool): return None
+    if isinstance(value, int):
+        return None if abs(value) <= MAX_SAFE else f"{path or 'the core'} {value} is outside the safe integer range"
+    if isinstance(value, float):
+        return f"{path or 'the core'} {value!r} must be an integer of magnitude at most {MAX_SAFE}"
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            problem = number_problem(item, f"{path}[{i}]")
+            if problem: return problem
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            problem = number_problem(item, f"{path}.{key}" if path else key)
+            if problem: return problem
+    return None
+
+def shape_problem(value):
+    """The required members, per the Required members table in README.md.
+
+    Without this a verifier accepts receipts the reference rejects, which is
+    the one failure mode an interop claim exists to prevent.
+    """
+    if not isinstance(value, dict): return "receipt must be an object"
+    if value.get("receipt_version") != "0.1":
+        return f"receipt_version {value.get('receipt_version')!r} is not 0.1"
+    agent = value.get("agent")
+    if not isinstance(agent, str) or not agent.startswith("age:agent:") or agent == "age:agent:":
+        return "agent must be an age:agent: id"
+    if not isinstance(value.get("timestamp"), str): return "timestamp must be a string"
+    if not isinstance(value.get("task"), dict): return "task must be an object"
+    action = value.get("action")
+    if not isinstance(action, dict) or not isinstance(action.get("type"), str):
+        return "action must be an object with a string type"
+    for member in ("inputs", "outputs"):
+        problem = artifacts_problem(value.get(member), member)
+        if problem: return problem
+    if not isinstance(value.get("environment"), dict): return "environment must be an object"
+    if value.get("policy") is not None and not isinstance(value.get("policy"), dict):
+        return "policy must be an object or null"
+    if not isinstance(value.get("id"), str) or not RECEIPT_ID.match(value["id"]):
+        return "id must be a sha256: digest"
+    if not isinstance(value.get("signatures"), list): return "signatures must be an array"
+    return number_problem(core_of(value))
 
 def core_of(receipt: dict) -> dict:
     return {k: v for k, v in receipt.items() if k not in ("id", "signatures")}
@@ -139,12 +204,21 @@ def verify(receipt: dict, registry_jwks: list, root_doc=None, proof=None):
     checks = []
     def rep(name, ok, detail): checks.append((name, ok, detail))
 
-    # 1. Receipt integrity
-    recomputed = "sha256:" + hashlib.sha256(canonical(core_of(receipt))).hexdigest()
-    rep("Receipt integrity", receipt.get("receipt_version") == "0.1" and receipt.get("id") == recomputed,
-        receipt.get("id", "<missing>"))
+    # 1. Receipt integrity. The shape comes first: ok must never mean less
+    # than structurally conformant, or this verifier accepts what the
+    # reference rejects.
+    problem = shape_problem(receipt)
+    if problem is not None:
+        rep("Receipt integrity", False, problem)
+        rep("Agent signature", False, "not checked, the receipt is malformed")
+        rep("Agent identity", False, "not checked, the receipt is malformed")
+        return checks
 
-    agent_sig = next((s for s in receipt["signatures"] if s["role"] == "agent"), None)
+    recomputed = "sha256:" + hashlib.sha256(canonical(core_of(receipt))).hexdigest()
+    rep("Receipt integrity", receipt.get("id") == recomputed, receipt.get("id", "<missing>"))
+
+    entries = [e for e in receipt["signatures"] if isinstance(e, dict)]
+    agent_sig = next((e for e in entries if e.get("role") == "agent"), None)
     if not agent_sig:
         rep("Agent signature", False, "absent"); rep("Agent identity", False, "absent")
     else:
@@ -201,8 +275,11 @@ if __name__ == "__main__":
     keys, root_doc = [g["keys"]["registry_public"]], g["root"]["document"]
     if len(sys.argv) > 2:
         given = json.loads(sys.argv[2])
-        proof = next((i["proof"] for i in g["receipts"] if i["receipt"].get("id") == given.get("id")),
-                     g["receipts"][0]["proof"])
+        # Only a proof that belongs to this receipt is worth applying. Falling
+        # back to another receipt's proof would report a root-inclusion
+        # failure that says nothing about the receipt in hand, and would hide
+        # whatever the other checks found.
+        proof = next((i["proof"] for i in g["receipts"] if i["receipt"].get("id") == given.get("id")), None)
         items = [{"receipt": given, "proof": proof}]
     else:
         items = g["receipts"]

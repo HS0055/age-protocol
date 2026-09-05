@@ -20,5 +20,18 @@
   },
   "files": [
     "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "age",
+    "age-protocol",
+    "receipts",
+    "ed25519",
+    "rfc8785",
+    "provenance",
+    "ai-agents",
+    "verification"
   ]
 }

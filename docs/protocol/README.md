@@ -83,11 +83,35 @@ is derived from it. The **signatures** are what other parties say about it.
 }
 ```
 
-`task`, `action`, `environment`, and `policy` are open-ended, and so is each
-entry of `inputs` and `outputs`. Every member an implementation does not
-recognise is still canonicalized and still signed, so nothing can be smuggled
-into a receipt outside the signature. `policy` may be `null`. `action.type`
-must be a string; each artifact must carry a string `kind` and `digest`.
+### Required members
+
+Every member below is required, and a verifier must fail a receipt that
+breaks any of these rules. This is not advisory: a verifier that accepts a
+receipt missing `timestamp` disagrees with one that does not, and two
+verifiers that disagree are worse than one.
+
+| Member | Rule |
+|---|---|
+| `receipt_version` | exactly the string `0.1` |
+| `agent` | a string beginning `age:agent:` with at least one character after the prefix |
+| `timestamp` | a string |
+| `task` | an object |
+| `action` | an object whose `type` is a string |
+| `inputs` | an array; every entry an object with a string `kind` and a string `digest` |
+| `outputs` | an array; every entry an object with a string `kind` and a string `digest` |
+| `environment` | an object |
+| `policy` | an object, or `null` |
+| `id` | a string matching `^sha256:[0-9a-f]{64}$` |
+| `signatures` | an array |
+
+Beyond those rules the core is open-ended. `task`, `action`, `environment`,
+`policy`, and every artifact entry may carry any additional members. Every
+member an implementation does not recognise is still canonicalized and still
+signed, so nothing can be smuggled into a receipt outside the signature.
+
+A verifier must also answer for input that is not a receipt at all. Given
+`null`, a number, a string, an array, or a `signatures` array holding `null`,
+it returns a verdict. It never raises.
 
 `id` is `sha256:` followed by the lowercase hex SHA-256 of the canonical bytes
 of the core, that is, of the receipt with `id` and `signatures` removed.
@@ -115,8 +139,16 @@ output. A quantity that is not a whole number belongs in a string, or in a
 smaller unit: milliseconds, cents, basis points. A signer must refuse a core
 that breaks this rule, and a verifier must fail such a receipt.
 
-Signatures are Ed25519, encoded base64url without padding, over the canonical
-bytes of the document being signed.
+The same restriction applies to every other signed number in AGE: a registry
+attestation's `sequence`, and a root document's `sequence_start` and
+`sequence_end`. All three are integers, and a sequence is at least 1.
+
+Signatures are Ed25519 over the canonical bytes of the document being signed,
+encoded base64url without padding. An Ed25519 signature is 64 bytes, so the
+encoding is **exactly 86 characters** from the alphabet `A-Za-z0-9_-`. A
+verifier must reject anything else, including a padded or standard-base64
+form, rather than decoding leniently: accepting two spellings of one
+signature means two implementations disagree about which receipts are valid.
 
 ## Identity
 
@@ -195,18 +227,40 @@ its own sequences:
   "root": "sha256:<64 hex>", "signature": "<base64url>" }
 ```
 
-The tree is RFC 6962 over the canonical bytes of each receipt, ordered by that
-registry's sequence, with the RFC 6962 domain prefixes (`0x00` for a leaf,
-`0x01` for a node). The signature covers the canonical bytes of the document
-without its `signature`. Sequences must be contiguous and unique: a signer
-must refuse to build a root over a range with a gap or a duplicate, because
-every inclusion proof for such a range would fail.
+The tree is RFC 6962, with the domain prefixes `0x00` for a leaf and `0x01`
+for a node.
 
-An inclusion proof is `{ "sequence", "index", "size", "path" }` per RFC 9162.
-Verifying inclusion requires the document's `root_version` to be `0.1` and the
-receipt to carry a registry entry from the registry the document names.
-Inclusion is not a substitute for checking the document's signature; both are
-required.
+**A leaf is the canonical bytes of the whole receipt**, including its `id` and
+its `signatures`, not of the core. Getting this wrong is the easiest way to
+build an implementation that agrees on every receipt and disagrees on every
+root, so it is worth stating twice: hash the receipt as published, registry
+signature and all. It follows that a receipt must already be registered before
+it can go into a root.
+
+Leaves are ordered by that registry's sequence. The signature covers the
+canonical bytes of the document without its `signature` member. Sequences must
+be contiguous and unique: a signer must refuse to build a root over a range
+with a gap or a duplicate, because every inclusion proof for such a range
+would fail.
+
+An inclusion proof is RFC 9162:
+
+```json
+{ "sequence": 185, "index": 1, "size": 3, "path": ["<64 hex>", "<64 hex>"] }
+```
+
+`path` entries are bare lowercase hex, 64 characters each, with **no**
+`sha256:` prefix; the prefix appears only on the document's `root`. `index` is
+`sequence` minus the document's `sequence_start`, and `size` is
+`sequence_end` minus `sequence_start` plus one. A verifier must check both
+rather than trusting them, or a proof from one position could be replayed at
+another.
+
+Verifying inclusion also requires the document's `root_version` to be `0.1`
+and the receipt to carry a registry entry from the registry the document
+names. Inclusion is not a substitute for checking the document's signature;
+both are required, and a tree nobody has checked the signature of proves
+nothing.
 
 These roots are published, not immutable. Witnessing and anchoring are
 possible later and are not part of v0.1.
