@@ -1,0 +1,67 @@
+name: publish
+# npm provenance requires publishing from a supported CI with an OIDC token,
+# so this workflow is the only way v0.1.0 gets published. A laptop cannot
+# produce a provenance attestation, and a package published without one
+# cannot gain it retroactively.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Pack and check without publishing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install cryptography
+
+      # Never publish something that has not just proved itself.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+
+      - name: verify a receipt from the packed tarballs
+        run: |
+          set -euo pipefail
+          TMP=$(mktemp -d)
+          (cd packages/receipts && pnpm pack --pack-destination "$TMP")
+          (cd packages/cli && pnpm pack --pack-destination "$TMP")
+          mkdir -p "$TMP/app/node_modules/@ageprotocol"
+          for pkg in receipts cli; do
+            tar -xzf "$TMP/ageprotocol-$pkg-"*.tgz -C "$TMP/app/node_modules/@ageprotocol"
+            mv "$TMP/app/node_modules/@ageprotocol/package" "$TMP/app/node_modules/@ageprotocol/$pkg"
+          done
+          cp docs/protocol/receipt.json docs/protocol/age-jwks.json "$TMP/app/"
+          cd "$TMP/app"
+          node node_modules/@ageprotocol/cli/bin/agectl.mjs verify receipt.json --jwks age-jwks.json
+
+      - name: publish with provenance
+        if: github.event_name == 'release' || inputs.dry_run == false
+        run: pnpm -r publish --access public --provenance --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: dry run
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
+        run: pnpm -r publish --access public --provenance --no-git-checks --dry-run
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

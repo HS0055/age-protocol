@@ -7,16 +7,9 @@ are invisible until they fail.
 
 ## Before the first publish
 
-1. **Create the public repository and push.** Then add `repository` to both
-   package manifests:
-
-   ```json
-   "repository": { "type": "git", "url": "git+https://github.com/<org>/<repo>.git" }
-   ```
-
-   npm provenance requires it, and without it the package page has no link to
-   the source. It is deliberately absent today rather than pointing at a
-   repository that does not exist.
+1. ~~**Create the public repository and push.**~~ Done:
+   https://github.com/HS0055/age-protocol. Both manifests carry `repository`,
+   `homepage`, and `bugs`, which npm provenance requires.
 
 2. **Claim the npm scope** `@ageprotocol`. Both packages already carry
    `"publishConfig": { "access": "public" }`; a scoped package publishes
@@ -27,12 +20,21 @@ are invisible until they fail.
 
 ## Publishing
 
-```
-pnpm install && pnpm test
-pnpm release
-```
+**Publishing happens in CI, not on a laptop.** npm will only attest provenance
+for a build it can witness, using an OIDC token that exists only inside a
+supported CI run. A package published from a workstation cannot gain
+provenance later.
 
-`pnpm release` builds both packages and publishes them in dependency order.
+So: create a GitHub release, and `.github/workflows/publish.yml` runs the full
+suite, verifies a receipt from the packed tarballs, and then publishes both
+packages with `--provenance --access public`. It needs one repository secret,
+`NPM_TOKEN`, an npm automation token.
+
+To rehearse without publishing, run the workflow manually with `dry_run` left
+true.
+
+`pnpm release` remains for a local publish without provenance. Prefer the
+workflow.
 Each package also builds on `prepack`, because `dist/` is gitignored: without
 that hook the published tarball would contain a `bin` script importing a
 `dist/index.js` that was never built. That failure is invisible to a local

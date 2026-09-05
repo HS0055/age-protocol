@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "description": "AGE Protocol v0.1: signed, verifiable receipts for work performed by AI agents",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HS0055/age-protocol.git",
+    "directory": "packages/receipts"
+  },
+  "homepage": "https://github.com/HS0055/age-protocol#readme",
+  "bugs": {
+    "url": "https://github.com/HS0055/age-protocol/issues"
+  },
   "type": "module",
   "exports": {
     ".": {
