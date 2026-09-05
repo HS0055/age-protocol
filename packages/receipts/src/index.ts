@@ -26,6 +26,7 @@ export {
   thumbprintOfId,
   coreOf,
   receiptShapeProblem,
+  coreNumberProblem,
   receiptIdOf,
   agentSigningInput,
   attestationOf,

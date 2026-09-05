@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   agentSign, registrySign, verifyReceipt, receiptIdOf, agentIdOf, registryIdOf, thumbprintOfId, coreOf,
   agentSignatureOf, registrySignatureOf, attestationOf, canonicalize, canonicalBytes, generateKeyPair, bareJwk,
-  keyMapFromJwks, sha256Digest, signBytes, registrySigningInput, toPublicJwk, receiptShapeProblem,
+  keyMapFromJwks, sha256Digest, signBytes, registrySigningInput, toPublicJwk, receiptShapeProblem, coreNumberProblem,
   AGENT_ID_PREFIX, REGISTRY_ID_PREFIX, RECEIPT_VERSION, ATTESTATION_VERSION,
   type PrivateJwk, type Receipt, type ReceiptCore, type RegistrySignature,
 } from '../src/index.ts';
@@ -365,4 +365,61 @@ test('a hostile role is reported in the detail and never becomes part of a check
 
   const known = verifyReceipt(entry('runtime'), { registryKeys: [registry.publicJwk] }).checks.at(-1);
   assert.deepEqual(known, { name: 'runtime_signature', status: 'skip', detail: 'unknown role, not checked' });
+});
+
+test('a core carrying a number that is not a safe integer is refused, and the message names the path', () => {
+  const digest = `sha256:${'aa'.repeat(32)}`;
+  const cases: Array<[string, ReceiptCore, RegExp]> = [
+    ['a fraction', core({ action: { type: 'benchmark.run', ratio: 1.5 } }), /action\.ratio/],
+    ['past the exponential threshold', core({ action: { type: 'benchmark.run', operations: 1e21 } }), /action\.operations/],
+    ['past the safe integer range', core({ action: { type: 'benchmark.run', operations: 2 ** 53 } }), /action\.operations/],
+    ['inside an array', core({ inputs: [{ kind: 'prompt', digest, size: 0.5 }] }), /inputs\[0\]\.size/],
+    ['deep in the environment', core({ environment: { limits: { cpu: 2.5 } } }), /environment\.limits\.cpu/],
+    ['not a number at all', core({ environment: { drift: Number.NaN } }), /environment\.drift/],
+  ];
+  for (const [label, value, path] of cases) {
+    assert.throws(() => agentSign(value, agent.privateJwk), path, label);
+    assert.match(coreNumberProblem(value) ?? '', path, label);
+  }
+
+  const allowed = core({
+    action: { type: 'git.commit', files_changed: 214, regressions: 0, drift: -1, operations: Number.MAX_SAFE_INTEGER },
+  });
+  assert.equal(coreNumberProblem(allowed), undefined);
+  assert.equal(verifyReceipt(agentSign(allowed, agent.privateJwk)).ok, true);
+});
+
+test('a receipt built with a number that is not a safe integer fails integrity', () => {
+  const receipt = forge({ ...core(), environment: { runtime: 'claude-code/2.1.0', drift: 1.5 } });
+  const result = verifyReceipt(receipt, { registryKeys: [registry.publicJwk] });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.checks.map((c) => [c.name, c.status]), [
+    ['integrity', 'fail'], ['agent_signature', 'fail'], ['agent_identity', 'fail'],
+  ]);
+  assert.match(result.checks[0]?.detail ?? '', /environment\.drift/);
+  assert.match(result.checks[0]?.detail ?? '', /9007199254740991/);
+});
+
+test('agentSign refuses to embed a key that is not exactly kty, crv, and x', () => {
+  assert.throws(() => agentSign(core(), { ...agent.privateJwk, kty: 'EC' } as never), /kty/);
+  assert.throws(() => agentSign(core(), { ...agent.privateJwk, crv: 'P-256' } as never), /crv/);
+  assert.throws(() => agentSign(core(), { ...agent.privateJwk, x: 42 } as never), /public JWK/);
+});
+
+test('a receipt whose embedded key carries an extra kid fails the agent signature', () => {
+  const receipt = registered();
+  const entry = agentSignatureOf(receipt);
+  assert.ok(entry);
+  const decorated: Receipt = {
+    ...receipt,
+    signatures: [{ ...entry, key: { ...entry.key, kid: 'label' } }, ...receipt.signatures.slice(1)],
+  };
+  // The id covers the core, and the embedded key is not in the core, so these
+  // two byte-different receipts share one id. proofFor matches by id while the
+  // Merkle leaf is the full bytes, which is why the key has to be constrained.
+  assert.equal(decorated.id, receipt.id);
+  const result = verifyReceipt(decorated, { registryKeys: [registry.publicJwk] });
+  assert.equal(result.ok, false);
+  assert.equal(result.checks[1]?.status, 'fail');
+  assert.match(result.checks[1]?.detail ?? '', /kid/);
 });

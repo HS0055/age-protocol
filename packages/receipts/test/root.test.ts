@@ -144,3 +144,23 @@ test('a root belongs to one registry, and a proof does not cross to another', ()
     assert.equal(verifyRootInclusion(receipt, proofB, rootA), false, 'foreign root');
   }
 });
+
+test('inclusion in a root whose version is wrong is not inclusion', () => {
+  const all = [five, six, seven];
+  const doc = buildRoot(all, '2026-09-05', registry.privateJwk);
+  const proof = proofFor(all, six, REGISTRY_ID);
+  assert.equal(verifyRootInclusion(six, proof, doc), true);
+  const older = { ...doc, root_version: '0.0' } as unknown as RootDocument;
+  assert.equal(verifyRootInclusion(six, proof, older), false);
+});
+
+test('a receipt is not included in a root that names a registry it was not registered by', () => {
+  const all = [five, six, seven];
+  const doc = buildRoot(all, '2026-09-05', registry.privateJwk);
+  const proof = proofFor(all, six, REGISTRY_ID);
+  // The tree arithmetic would otherwise succeed: same leaves, same position,
+  // same sequence range. Only the registry the document names differs, and
+  // six carries no entry from that registry.
+  const foreign = { ...doc, registry: SECOND_ID } as RootDocument;
+  assert.equal(verifyRootInclusion(six, proof, foreign), false);
+});

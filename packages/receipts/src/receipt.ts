@@ -28,10 +28,15 @@ export function thumbprintOfId(id: string, prefix: string): string | undefined {
   return id.slice(prefix.length);
 }
 
+// Open-ended like the rest of the core: verifyReceipt requires only a string
+// kind and digest, and canonicalization signs whatever else an artifact
+// carries. A closed type here would reject at compile time what the runtime
+// accepts and signs.
 export interface ReceiptArtifact {
   kind: string;
   digest: string;
   ref?: string;
+  [member: string]: unknown;
 }
 
 export interface ReceiptTask {
@@ -198,6 +203,37 @@ function artifactsProblem(value: unknown, member: string): string | undefined {
   return undefined;
 }
 
+// RFC 8785 serializes numbers the ES6 way, and a first-time implementer
+// reaching for a built-in JSON serializer will not reproduce it: an integral
+// float prints as 100.0 in some languages, and the thresholds and zero
+// padding of exponential notation differ (1e20, 1e-6, 1e-7 all disagree).
+// Every safe integer serializes identically everywhere, so the core carries
+// only those, and a stranger's first verifier is byte correct. A quantity
+// that is not a whole number belongs in a string, or in a smaller unit:
+// milliseconds, cents, basis points.
+export function coreNumberProblem(value: unknown, path = ''): string | undefined {
+  if (typeof value === 'number') {
+    if (Number.isSafeInteger(value)) return undefined;
+    const where = path === '' ? 'the core' : path;
+    return `${where} ${safeText(value)} must be an integer of magnitude at most ${Number.MAX_SAFE_INTEGER}`;
+  }
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i += 1) {
+      const problem = coreNumberProblem(value[i], `${path}[${i}]`);
+      if (problem !== undefined) return problem;
+    }
+    return undefined;
+  }
+  if (isObject(value)) {
+    for (const member of Object.keys(value)) {
+      const problem = coreNumberProblem(value[member], path === '' ? member : `${path}.${member}`);
+      if (problem !== undefined) return problem;
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
 // What a third-party verifier that validates the schema would insist on. ok
 // must never mean less than this, or a receipt this verifier calls verified
 // is one another verifier rejects, which breaks interoperability in the
@@ -221,7 +257,7 @@ export function receiptShapeProblem(value: unknown): string | undefined {
   if (value.policy !== null && !isObject(value.policy)) return 'policy must be an object or null';
   if (typeof value.id !== 'string' || !RECEIPT_ID.test(value.id)) return 'id must be a sha256: digest';
   if (!Array.isArray(value.signatures)) return 'signatures must be an array';
-  return undefined;
+  return coreNumberProblem(coreOf(value as unknown as Receipt));
 }
 
 function assertCore(core: ReceiptCore, caller: string): void {
@@ -234,12 +270,19 @@ function assertCore(core: ReceiptCore, caller: string): void {
   if (typeof core.action !== 'object' || core.action === null || typeof core.action.type !== 'string') {
     throw new Error(`${caller}: action.type is required`);
   }
+  const numbers = coreNumberProblem(coreOf(core));
+  if (numbers !== undefined) throw new Error(`${caller}: ${numbers}`);
 }
 
 export function agentSign(core: ReceiptCore, agentPrivate: PrivateJwk): Receipt {
   assertCore(core, 'agentSign');
   const clean = coreOf(core);
+  if (!isPublicJwk(agentPrivate)) {
+    throw new Error('agentSign: the signing key must carry the string members of a public JWK: kty, crv, and x');
+  }
   const key = bareJwk(toPublicJwk(agentPrivate));
+  const keyProblem = embeddedKeyProblem(key);
+  if (keyProblem !== undefined) throw new Error(`agentSign: ${keyProblem}`);
   const signer = agentIdOf(key);
   if (signer !== clean.agent) {
     throw new Error(`agentSign: core.agent ${clean.agent} is not the id of the signing key ${signer}`);

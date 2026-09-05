@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import {
   agentSign, registrySign, verifyReceipt, buildRoot, proofFor, verifyRoot, verifyRootInclusion, attestationOf,
   registrySignatureOf, canonicalize, canonicalBytes, agentIdOf, registryIdOf, receiptIdOf, rootSigningInput, rootLeaves,
-  RECEIPT_VERSION, ATTESTATION_VERSION, ROOT_VERSION,
+  RECEIPT_VERSION, ATTESTATION_VERSION, ROOT_VERSION, coreNumberProblem,
   type PrivateJwk, type PublicJwk, type Receipt, type ReceiptCore, type RegistryAssignment, type RootDocument, type RootProof,
 } from '../src/index.ts';
 
@@ -68,9 +68,13 @@ test('the vector pins the two canonicalization corners RFC 8785 is easiest to ge
   // part, and one beyond the safe integer range is exponential.
   const action = golden.receipts[2]?.core.action as Record<string, unknown>;
   assert.equal(action.regressions, 1);
-  assert.equal(action.operations, 1e21);
-  assert.match(golden.receipts[2]?.agent_signing_input ?? '', /"operations":1e\+21/);
+  assert.equal(action.operations, Number.MAX_SAFE_INTEGER);
+  assert.match(golden.receipts[2]?.agent_signing_input ?? '', /"operations":9007199254740991/);
   assert.match(golden.receipts[2]?.agent_signing_input ?? '', /"regressions":1,/);
+  assert.match(golden.receipts[2]?.agent_signing_input ?? '', /"drift":-1/);
+  // Every number in the vector is one a built-in serializer writes the same
+  // way in any language, which is the whole point of the constraint.
+  assert.equal(coreNumberProblem(golden.receipts[2]?.core), undefined);
 });
 
 test('all three registered receipts and their attestations are reproduced byte for byte', () => {

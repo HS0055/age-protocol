@@ -109,6 +109,10 @@ export function verifyRootInclusion(receipt: Receipt, proof: RootProof, doc: Roo
   const document = doc as unknown;
   const claim = proof as unknown;
   if (!isObject(document) || !isObject(claim) || !isObject(receipt as unknown)) return false;
+  // Inclusion alone says nothing: a tree the caller has not checked the
+  // signature of, or one built by another registry, would otherwise answer
+  // true on its own. verifyRoot is still required; this binds the two.
+  if (document.root_version !== ROOT_VERSION) return false;
   if (typeof document.root !== 'string' || !document.root.startsWith(DIGEST_PREFIX)) return false;
   if (typeof document.registry !== 'string') return false;
   if (!Number.isInteger(document.sequence_start) || !Number.isInteger(document.sequence_end)) return false;

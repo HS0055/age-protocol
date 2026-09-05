@@ -1,9 +1,14 @@
-# AGIE Cloud to Runtime Protocol, v0 (draft)
+# AGE Protocol v0.1, and the AGIE Cloud to Runtime draft
 
-This document is the contract between AGIE Cloud and an AGIE Runtime node.
-It is published here, in the open runtime repository, so anyone can build a
-runtime or a client. Version 0 is a draft; breaking changes are expected
-until v1 is tagged.
+This document has two halves. **Receipts**, from that heading onward, is AGE
+Protocol v0.1: the receipt format, identity, canonicalization, signatures,
+daily roots, and verification. It is implemented, frozen by the interop vector
+beside this file, and normative.
+
+Everything before it is the draft contract between AGIE Cloud and an AGIE
+Runtime node. That half is **parked**, not implemented, and will change. It is
+published here, in the open runtime repository, so anyone can build a runtime
+or a client. Breaking changes are expected until v1 is tagged.
 
 ## Principles
 
@@ -11,8 +16,8 @@ until v1 is tagged.
 - Every runtime request is signed with the node key (RFC 9449 DPoP proof
   with an EdDSA JWK). The cloud stores public keys only.
 - Source code never crosses the wire. Logs, metadata, and hashes do.
-- Every meaningful event becomes a receipt signed by the node and
-  countersigned by the cloud (see Receipts below).
+- Every meaningful event becomes a receipt signed by the agent and
+  countersigned by a registry (see Receipts below).
 
 ## Identities
 
@@ -59,11 +64,11 @@ JWKS with wrong or missing `kid` values changes nothing.
   at most one job: `{ "id", "run_id", "adapter", "repo": { "url", "ref" }, "prompt_bundle_url", "policy": { ... } }`.
 - `POST /api/runtime/jobs/:id/claim` claims it atomically; a second claim returns 409.
 - `POST /api/runtime/jobs/:id/logs` appends `{ "stream": "stdout" | "stderr", "seq", "chunk" }`.
-- `POST /api/runtime/jobs/:id/events` posts a node-signed receipt envelope for
-  `session.started`, `tool.gated`, `git.commit`, `session.finished`. The cloud
-  assigns `id`, `seq`, and `prev`, countersigns, stores it, and returns the
-  full receipt. The node signature covers the envelope only, so it still
-  verifies after the cloud has filled those three in.
+- `POST /api/runtime/jobs/:id/events` posts an agent-signed receipt for
+  `session.started`, `tool.gated`, `git.commit`, `session.finished`, in the
+  AGE Protocol v0.1 form specified under Receipts below. The registry
+  countersigns it with a sequence and returns the full receipt. The agent
+  signature covers the core alone, so it still verifies afterwards.
 - `POST /api/runtime/jobs/:id/result` posts
   `{ "exit_code", "session_id", "usage", "changed_files": [{ "path_hash", "sha256" }], "work_products": [] }`.
 
@@ -76,11 +81,12 @@ pending, the runtime polls `GET /api/runtime/gates/:approval_id` every 5 seconds
 
 ## Receipts
 
-Receipt schema, signing inputs, chain rules, and Merkle roots are implemented
-in `packages/receipts` and are normative. `golden-v0.json` next to this file is
-the interop vector: fixed keys, fixed events, and the exact bytes every value
+Receipts follow **AGE Protocol v0.1**, specified below. The implementation in
+`packages/receipts` is normative, and `golden-v0.1.json` next to this file is
+the interop vector: fixed keys, fixed content, and the exact bytes every value
 below must have. Ed25519 is deterministic, so a conforming implementation
-reproduces it byte for byte.
+reproduces it byte for byte. The vector carries three registered receipts
+forming a three-leaf Merkle tree, so no inclusion proof has an empty path.
 
 ### Domain separation
 
@@ -98,72 +104,174 @@ be merged into one structure, and no later version may reuse a `*_version`
 member name for a different kind of document. Domain separation in AGE rests
 on these member names alone; there is no separate type tag to fall back on.
 
-### Envelope and body
+### The receipt
 
-The node builds and signs an envelope. The cloud assigns three members and
-countersigns. Nothing else is added.
+A receipt has three parts. The **core** is what the agent asserts. The **id**
+is derived from it. The **signatures** are what other parties say about it.
 
-| Member | Written by | In the node signing input |
-|---|---|---|
-| `typ`, `v`, `ts`, `company`, `mission`, `task`, `run` | node | yes |
-| `actor`, `node`, `cloud`, `action`, `inputs`, `outputs`, `gate` | node | yes |
-| `id`, `seq`, `prev` | cloud | no |
-| `node_sig` | node | no |
-| `cloud_sig` | cloud | no |
+```json
+{
+  "receipt_version": "0.1",
+  "agent": "age:agent:<thumbprint>",
+  "timestamp": "2026-09-05T03:20:00Z",
+  "task": { "id": "tsk_91", "description": "Fix authentication bug" },
+  "action": { "type": "git.commit", "commit": "<40 hex>", "files_changed": 3 },
+  "inputs": [{ "kind": "prompt", "digest": "sha256:<64 hex>" }],
+  "outputs": [{ "kind": "commit", "digest": "sha256:<64 hex>", "ref": "<40 hex>" }],
+  "environment": { "runtime": "claude-code/2.1.0" },
+  "policy": { "id": "default", "decision": "allowed" },
 
-- canonical form: RFC 8785 (JCS). A member named `__proto__` is an ordinary
-  member and is canonicalized like any other.
-- `typ` is `"agie/receipt/1"` for a receipt and `"agie/root/1"` for a daily
-  root document. It is the first line of defence against replaying a signature
-  over one structure as a signature over another, and a verifier rejects a
-  document whose `typ` is missing or unexpected.
-- node signature: Ed25519 over the canonical envelope, which is the receipt
-  without `id`, `seq`, `prev`, `node_sig`, and `cloud_sig`.
-- cloud signature: Ed25519 over the canonical body including `id`, `seq`,
-  `prev`, and `node_sig` (null when the cloud issued the receipt alone),
-  without `cloud_sig`.
-- signatures are base64url with no padding, 86 characters. No other encoding
-  of the same bytes is accepted.
-- receipt hash: SHA-256 hex over the canonical full receipt, both signatures
-  included.
-- chain: `prev` is the hash of the previous receipt in the same mission; `seq`
-  is global and strictly increasing.
+  "id": "sha256:<64 hex>",
+  "signatures": [ ... ]
+}
+```
 
-### Node public keys
+`task`, `action`, `environment`, and `policy` are open-ended, and so is each
+entry of `inputs` and `outputs`. Every member an implementation does not
+recognise is still canonicalized and still signed, so nothing can be smuggled
+into a receipt outside the signature. `policy` may be `null`. `action.type`
+must be a string; each artifact must carry a string `kind` and `digest`.
 
-`node` is `null` for a cloud-only receipt, otherwise
-`{ "jkt": string, "jwk"?: PublicJwk }`. The optional `jwk` lets a receipt carry
-the key that signed it, so a verifier needs nothing but the receipt and the
-cloud JWKS. It is self-certifying and is accepted only when its RFC 7638
-thumbprint equals `jkt`, which both signatures cover. Without it, the verifier
-takes the node key from the JWKS it was given, again matched by thumbprint.
+`id` is `sha256:` followed by the lowercase hex SHA-256 of the canonical bytes
+of the core, that is, of the receipt with `id` and `signatures` removed.
+
+### Canonicalization
+
+Canonical JSON is RFC 8785 (JCS): object members sorted by key, no
+insignificant whitespace, and ES6 number and string serialization. Two rules
+deserve emphasis because they are where independent implementations diverge.
+
+**Keys sort by UTF-16 code unit, not by code point.** A supplementary-plane
+key such as U+1F527 sorts *before* U+FFFF. A language that sorts by code point
+produces different bytes and therefore a different signature. Receipt 185 of
+the interop vector pins this.
+
+**Numbers in a core must be integers with an absolute value no greater than
+9007199254740991.** RFC 8785 requires ES6 number serialization, which many
+built-in JSON serializers do not reproduce: an integral float prints as
+`100.0` in some languages, and the thresholds and zero padding of exponential
+notation differ (`1e20`, `1e-6`, and `1e-7` all disagree between JavaScript
+and Python). Every safe integer, by contrast, serializes identically
+everywhere. Restricting the core to safe integers means an implementer who
+reaches for a built-in serializer, which everyone does first, gets byte-correct
+output. A quantity that is not a whole number belongs in a string, or in a
+smaller unit: milliseconds, cents, basis points. A signer must refuse a core
+that breaks this rule, and a verifier must fail such a receipt.
+
+Signatures are Ed25519, encoded base64url without padding, over the canonical
+bytes of the document being signed.
+
+### Identity
+
+An agent identity is `age:agent:` followed by the RFC 7638 JWK thumbprint of
+its Ed25519 public key. A registry identity is `age:registry:` followed by the
+same thumbprint of its key. Identities are therefore *derived*, never issued:
+`agectl identity init` mints one locally with no network and no account, and a
+registry can only recognise a key it is shown, never grant one.
+
+Public keys are looked up by computed thumbprint, never by a `kid` label, so a
+mislabelled key cannot bind an identity to a key that does not hash to it.
+
+### Signatures
+
+`signatures` is an array of entries, each naming a `role`. Order carries no
+meaning, and every entry is judged or reported by name, so no entry can hide
+behind another that shares its role.
+
+| role | count in v0.1 | what it attests |
+| --- | --- | --- |
+| `agent` | exactly one, required | the content of the core |
+| `registry` | zero or more | that this receipt id was registered at a sequence and time |
+| anything else | any | reported, never judged by a v0.1 verifier |
+
+The agent entry embeds the public key it was signed with:
+
+```json
+{ "role": "agent", "signer": "age:agent:<thumbprint>", "alg": "Ed25519",
+  "key": { "kty": "OKP", "crv": "Ed25519", "x": "<base64url>" },
+  "signature": "<base64url>" }
+```
+
+The embedded key carries exactly `kty`, `crv`, and `x`, with `kty` `OKP` and
+`crv` `Ed25519`, and nothing else. This is not cosmetic: the key sits outside
+the core, so two receipts whose embedded keys differ share one `id`, and a
+proof is matched by id while a Merkle leaf is the full receipt bytes. A
+verifier must reject an embedded key carrying any other member.
+
+The receipt is self-certifying: `age:agent:` plus the thumbprint of the
+embedded key must equal both the entry's `signer` and the core's `agent`, and
+the core's `agent` is inside the signed bytes.
+
+`alg` must be `Ed25519` on an `agent` or `registry` entry. Roles a verifier
+does not know are reported and skipped, never judged, so `runtime`,
+`hardware`, and `organization` signers can be added later without breaking
+verifiers written against v0.1.
+
+### Registry attestation
+
+A registry does not re-sign content. It signs a short statement about a
+receipt id:
+
+```json
+{ "attestation_version": "0.1", "receipt": "sha256:<64 hex>",
+  "agent": "age:agent:<thumbprint>", "sequence": 184,
+  "registered_at": "2026-09-05T03:20:04Z", "registry": "age:registry:<thumbprint>" }
+```
+
+The signature over the canonical bytes of exactly those six members becomes a
+`registry` entry carrying `role`, `signer`, `alg`, `sequence`,
+`registered_at`, an optional `jwks` hint URL, and `signature`.
+
+Because the registry vouches only for sequence and time, a tampered receipt
+can still carry a valid registry signature: what breaks is the link between
+the id and the content, which the integrity and agent checks catch. Keeping
+the claims separate is deliberate.
 
 ### Daily roots
 
-The daily tree is an RFC 6962 (RFC 9162) Merkle tree whose leaves are the
-canonical bytes of every receipt issued that UTC day, in ascending `seq` order.
-The root document is
+A registry publishes a signed document per UTC day over a contiguous run of
+its own sequences:
 
 ```json
-{ "typ": "agie/root/1", "date": "2026-09-04", "size": 2, "root": "<hex>", "cloud": { "jkt": "<jkt>" }, "sig": "<base64url>" }
+{ "root_version": "0.1", "registry": "age:registry:<thumbprint>",
+  "date": "2026-09-05", "sequence_start": 184, "sequence_end": 186,
+  "root": "sha256:<64 hex>", "signature": "<base64url>" }
 ```
 
-where `sig` signs the canonical bytes of `{ typ, date, size, root }`.
+The tree is RFC 6962 over the canonical bytes of each receipt, ordered by that
+registry's sequence, with the RFC 6962 domain prefixes (`0x00` for a leaf,
+`0x01` for a node). The signature covers the canonical bytes of the document
+without its `signature`. Sequences must be contiguous and unique: a signer
+must refuse to build a root over a range with a gap or a duplicate, because
+every inclusion proof for such a range would fail.
 
-Daily roots are published at
-`https://<cloud>/.well-known/agie-roots/<YYYY-MM-DD>.json` and mirrored to the
-public git repository named by `roots_mirror` in the cloud's
-`/.well-known/agie.json`, so a root the cloud later changes leaves a trace
-outside the cloud.
+An inclusion proof is `{ "sequence", "index", "size", "path" }` per RFC 9162.
+Verifying inclusion requires the document's `root_version` to be `0.1` and the
+receipt to carry a registry entry from the registry the document names.
+Inclusion is not a substitute for checking the document's signature; both are
+required.
 
-An inclusion proof is
+These roots are published, not immutable. Witnessing and anchoring are
+possible later and are not part of v0.1.
 
-```json
-{ "index": 1, "size": 2, "path": ["<64 hex characters>", "..."] }
-```
+### Verification
 
-`index` is the position of the receipt in that day's tree, `size` is the tree
-size the proof was made against and must equal the `size` in the root
-document, and `path` holds the audit path from the leaf upwards.
+A verifier reports every check and reaches a verdict only from them. A
+receipt is verified when no check failed; a skipped check is not a failure.
 
-`agie verify` checks all of the above offline.
+| check | fails when |
+| --- | --- |
+| Receipt integrity | the core is malformed, carries a number outside the safe integer range, or its hash is not `id` |
+| Agent signature | there is not exactly one agent entry, its embedded key is wrong, `alg` is not `Ed25519`, or the signature does not verify |
+| Agent identity | the embedded key's thumbprint does not equal both `signer` and the core's `agent` |
+| Registry signature | any registry entry fails to verify, or names a key the verifier cannot obtain |
+| Commit binding | `action.type` is `git.commit` and the commit is not a 40-hex id listed in `outputs` |
+| Root inclusion | a root and proof were supplied and the receipt is not in that tree |
+
+A receipt with no registry entry skips the registry check and can still be
+verified: a receipt is valid before it is registered. A check for a role the
+verifier does not know is always reported as skipped.
+
+Every one of these must answer for hostile input rather than throwing. A
+verifier handed `null`, a primitive, or a `signatures` array holding `null`
+returns a verdict, never an exception.

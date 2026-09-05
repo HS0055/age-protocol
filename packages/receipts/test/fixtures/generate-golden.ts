@@ -45,12 +45,12 @@ const DATE = '2026-09-05';
 const TOOLCHAIN_KEY = String.fromCodePoint(0x1f527);
 const SENTINEL_KEY = String.fromCodePoint(0xffff);
 
-// An integral value that arrived as a float. ES6 number serialization, which
-// RFC 8785 requires, writes it as 1 and never as 1.0.
+// An integral value that arrived as a float. The core admits only safe
+// integers, and this is one: every language writes it 1, never 1.0.
 const INTEGRAL_FROM_FLOAT = 3 / 3;
-// Past the safe integer range, where ES6 switches to exponential form. It is
-// written 1e+21, not 1000000000000000000000 and not 1.0e+21.
-const BEYOND_SAFE_INTEGERS = 1e21;
+// The largest number a core may carry. It is written in full, never in
+// exponential form, and it is the boundary an implementation must not round.
+const LARGEST_ALLOWED = Number.MAX_SAFE_INTEGER;
 
 const cores: ReceiptCore[] = [
   {
@@ -98,8 +98,9 @@ const cores: ReceiptCore[] = [
       type: 'benchmark.run',
       suite: 'canonicalization',
       regressions: INTEGRAL_FROM_FLOAT,
-      operations: BEYOND_SAFE_INTEGERS,
-      seconds: 0.5,
+      operations: LARGEST_ALLOWED,
+      microseconds: 500_000,
+      drift: -1,
     },
     inputs: [{ kind: 'commit', digest: `sha256:${'bb'.repeat(32)}`, ref: COMMIT }],
     outputs: [{ kind: 'report', digest: `sha256:${'ff'.repeat(32)}` }],
@@ -143,9 +144,12 @@ const golden = {
     'inclusion proof has a non-empty path and one of them carries an internal node hash: an',
     'implementation that omits the RFC 6962 domain prefixes cannot reproduce them.',
     'Receipt 185 carries an environment with a supplementary-plane key and a U+FFFF key, which RFC 8785',
-    'orders by UTF-16 code unit: the supplementary-plane key comes first. Receipt 186 carries an',
-    'integral number that must be written 1 rather than 1.0, and one beyond the safe integer range that',
-    'must be written 1e+21.',
+    'orders by UTF-16 code unit: the supplementary-plane key comes first. Receipt 186 carries the',
+    'largest number a core may hold, written in full and never in exponential form, an integral value',
+    'that arrived as a float and must be written 1 rather than 1.0, a negative integer, and a duration',
+    'in microseconds: a core carries only integers of magnitude at most 9007199254740991, so that any',
+    'language built-in JSON serializer produces these bytes. A value that is not whole belongs in a',
+    'string or in a smaller unit.',
   ].join(' '),
   versions: { receipt: RECEIPT_VERSION, attestation: ATTESTATION_VERSION, root: ROOT_VERSION },
   keys: {

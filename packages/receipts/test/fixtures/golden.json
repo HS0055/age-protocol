@@ -1,5 +1,5 @@
 {
-  "note": "Golden interop vector for AGE Protocol v0.1. Fixed keys, fixed content, byte-identical output. Ed25519 is deterministic, so a conforming implementation reproduces every id and signature here. Three registered receipts at sequences 184, 185, and 186 form a three-leaf Merkle tree, so every inclusion proof has a non-empty path and one of them carries an internal node hash: an implementation that omits the RFC 6962 domain prefixes cannot reproduce them. Receipt 185 carries an environment with a supplementary-plane key and a U+FFFF key, which RFC 8785 orders by UTF-16 code unit: the supplementary-plane key comes first. Receipt 186 carries an integral number that must be written 1 rather than 1.0, and one beyond the safe integer range that must be written 1e+21.",
+  "note": "Golden interop vector for AGE Protocol v0.1. Fixed keys, fixed content, byte-identical output. Ed25519 is deterministic, so a conforming implementation reproduces every id and signature here. Three registered receipts at sequences 184, 185, and 186 form a three-leaf Merkle tree, so every inclusion proof has a non-empty path and one of them carries an internal node hash: an implementation that omits the RFC 6962 domain prefixes cannot reproduce them. Receipt 185 carries an environment with a supplementary-plane key and a U+FFFF key, which RFC 8785 orders by UTF-16 code unit: the supplementary-plane key comes first. Receipt 186 carries the largest number a core may hold, written in full and never in exponential form, an integral value that arrived as a float and must be written 1 rather than 1.0, a negative integer, and a duration in microseconds: a core carries only integers of magnitude at most 9007199254740991, so that any language built-in JSON serializer produces these bytes. A value that is not whole belongs in a string or in a smaller unit.",
   "versions": {
     "receipt": "0.1",
     "attestation": "0.1",
@@ -217,7 +217,7 @@
         "size": 3,
         "path": [
           "af8e31728e059d3cfa5e5db50679819ce138050114f74337f7e1740f81fdb5e1",
-          "fa01b005043ffe5138599a5e2a5faf0c88ae64f26da0fcb1c2703458a12d16ed"
+          "3123c4c8c76b9c1ae26171e9f60c65e2796c2d9199c04bfdb7005bfc732b1213"
         ]
       }
     },
@@ -385,7 +385,7 @@
         "size": 3,
         "path": [
           "ad97145901632387567015c3e059b245709f8c14df64180bfa5799e64331c277",
-          "fa01b005043ffe5138599a5e2a5faf0c88ae64f26da0fcb1c2703458a12d16ed"
+          "3123c4c8c76b9c1ae26171e9f60c65e2796c2d9199c04bfdb7005bfc732b1213"
         ]
       }
     },
@@ -402,8 +402,9 @@
           "type": "benchmark.run",
           "suite": "canonicalization",
           "regressions": 1,
-          "operations": 1e+21,
-          "seconds": 0.5
+          "operations": 9007199254740991,
+          "microseconds": 500000,
+          "drift": -1
         },
         "inputs": [
           {
@@ -424,7 +425,7 @@
         },
         "policy": null
       },
-      "agent_signing_input": "{\"action\":{\"operations\":1e+21,\"regressions\":1,\"seconds\":0.5,\"suite\":\"canonicalization\",\"type\":\"benchmark.run\"},\"agent\":\"age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"environment\":{\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"runtime\":\"claude-code/2.1.0\"},\"inputs\":[{\"digest\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"commit\",\"ref\":\"8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918\"}],\"outputs\":[{\"digest\":\"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"kind\":\"report\"}],\"policy\":null,\"receipt_version\":\"0.1\",\"task\":{\"description\":\"Benchmark the canonicalizer\",\"id\":\"tsk_93\"},\"timestamp\":\"2026-09-05T04:02:51Z\"}",
+      "agent_signing_input": "{\"action\":{\"drift\":-1,\"microseconds\":500000,\"operations\":9007199254740991,\"regressions\":1,\"suite\":\"canonicalization\",\"type\":\"benchmark.run\"},\"agent\":\"age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"environment\":{\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"runtime\":\"claude-code/2.1.0\"},\"inputs\":[{\"digest\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"commit\",\"ref\":\"8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918\"}],\"outputs\":[{\"digest\":\"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"kind\":\"report\"}],\"policy\":null,\"receipt_version\":\"0.1\",\"task\":{\"description\":\"Benchmark the canonicalizer\",\"id\":\"tsk_93\"},\"timestamp\":\"2026-09-05T04:02:51Z\"}",
       "signed": {
         "receipt_version": "0.1",
         "agent": "age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw",
@@ -437,8 +438,9 @@
           "type": "benchmark.run",
           "suite": "canonicalization",
           "regressions": 1,
-          "operations": 1e+21,
-          "seconds": 0.5
+          "operations": 9007199254740991,
+          "microseconds": 500000,
+          "drift": -1
         },
         "inputs": [
           {
@@ -458,7 +460,7 @@
           "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         },
         "policy": null,
-        "id": "sha256:6eace589bef94f159b8bf5e6e39d5c565f83d4abd6f2e82a471275565738ead5",
+        "id": "sha256:8f61495ea8c53b58ae9a8ee2ee7775f751fc1b4c4d18da7d5a3088c6e6378b9c",
         "signatures": [
           {
             "role": "agent",
@@ -469,7 +471,7 @@
               "crv": "Ed25519",
               "x": "IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI"
             },
-            "signature": "CjupEZ8QxTdkiSpzt9kDeAASiO_eQxKMZDXgS_-O6bToHXfKYVWilITK_ZZ1hErHH_l64ENQCc_ebsoZzyNsBQ"
+            "signature": "DBlRROOkSzhjQozxs_rtEy-mNBh1HQKSVt_f2S3jK7bSP93wTt-yNvb_VSOy8IykcSATMH_nHLGEASWKF0ycDg"
           }
         ]
       },
@@ -480,13 +482,13 @@
       },
       "attestation": {
         "attestation_version": "0.1",
-        "receipt": "sha256:6eace589bef94f159b8bf5e6e39d5c565f83d4abd6f2e82a471275565738ead5",
+        "receipt": "sha256:8f61495ea8c53b58ae9a8ee2ee7775f751fc1b4c4d18da7d5a3088c6e6378b9c",
         "agent": "age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw",
         "sequence": 186,
         "registered_at": "2026-09-05T04:02:57Z",
         "registry": "age:registry:kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM"
       },
-      "registry_signing_input": "{\"agent\":\"age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"attestation_version\":\"0.1\",\"receipt\":\"sha256:6eace589bef94f159b8bf5e6e39d5c565f83d4abd6f2e82a471275565738ead5\",\"registered_at\":\"2026-09-05T04:02:57Z\",\"registry\":\"age:registry:kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\",\"sequence\":186}",
+      "registry_signing_input": "{\"agent\":\"age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"attestation_version\":\"0.1\",\"receipt\":\"sha256:8f61495ea8c53b58ae9a8ee2ee7775f751fc1b4c4d18da7d5a3088c6e6378b9c\",\"registered_at\":\"2026-09-05T04:02:57Z\",\"registry\":\"age:registry:kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\",\"sequence\":186}",
       "receipt": {
         "receipt_version": "0.1",
         "agent": "age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw",
@@ -499,8 +501,9 @@
           "type": "benchmark.run",
           "suite": "canonicalization",
           "regressions": 1,
-          "operations": 1e+21,
-          "seconds": 0.5
+          "operations": 9007199254740991,
+          "microseconds": 500000,
+          "drift": -1
         },
         "inputs": [
           {
@@ -520,7 +523,7 @@
           "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         },
         "policy": null,
-        "id": "sha256:6eace589bef94f159b8bf5e6e39d5c565f83d4abd6f2e82a471275565738ead5",
+        "id": "sha256:8f61495ea8c53b58ae9a8ee2ee7775f751fc1b4c4d18da7d5a3088c6e6378b9c",
         "signatures": [
           {
             "role": "agent",
@@ -531,7 +534,7 @@
               "crv": "Ed25519",
               "x": "IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI"
             },
-            "signature": "CjupEZ8QxTdkiSpzt9kDeAASiO_eQxKMZDXgS_-O6bToHXfKYVWilITK_ZZ1hErHH_l64ENQCc_ebsoZzyNsBQ"
+            "signature": "DBlRROOkSzhjQozxs_rtEy-mNBh1HQKSVt_f2S3jK7bSP93wTt-yNvb_VSOy8IykcSATMH_nHLGEASWKF0ycDg"
           },
           {
             "role": "registry",
@@ -540,7 +543,7 @@
             "sequence": 186,
             "registered_at": "2026-09-05T04:02:57Z",
             "jwks": "https://registry.ageprotocol.dev/.well-known/age-jwks.json",
-            "signature": "Pl3SOG_2LJrLfRbRkJ0cQboQBMqhhIaTKm064ak1yi8jDO0XCykOrO7vpc96rqdJmkABW0fqS7tSMWBQ8OUgDA"
+            "signature": "6ZefNj-ZYu7S76puKMW2aXu9RC9JAA19Z0gYqa5FUJz8WoTDpLHK06WAoy0IOeySEypRM3R2hO3bUK4xLPAWDA"
           }
         ]
       },
@@ -561,14 +564,14 @@
       "date": "2026-09-05",
       "sequence_start": 184,
       "sequence_end": 186,
-      "root": "sha256:a91bda683383a551f134223135ee97abd73b09a6ab505d7176219dd47cc1a3d4",
-      "signature": "UMIGX9jOs0THnfhu_JIJPhT39I4G8GXkg1pJSZZVonp0yfhY5VCHU0VeXKC0qtrJxYpByJgLY7Ko11K2BVXoDQ"
+      "root": "sha256:d8ca87992942b61165280d6444549f517e1607f961de049f26cdee300cee1447",
+      "signature": "y81xLGpRDLo7ncg38NVXUIUggov6ZPwAHLpiVj7Ept8HyUS0OlZy_-d025b2FUwcMadOJOoyy4cvdjmR_TS5Dw"
     },
-    "signing_input": "{\"date\":\"2026-09-05\",\"registry\":\"age:registry:kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\",\"root\":\"sha256:a91bda683383a551f134223135ee97abd73b09a6ab505d7176219dd47cc1a3d4\",\"root_version\":\"0.1\",\"sequence_end\":186,\"sequence_start\":184}",
+    "signing_input": "{\"date\":\"2026-09-05\",\"registry\":\"age:registry:kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\",\"root\":\"sha256:d8ca87992942b61165280d6444549f517e1607f961de049f26cdee300cee1447\",\"root_version\":\"0.1\",\"sequence_end\":186,\"sequence_start\":184}",
     "leaves": [
       "{\"action\":{\"commit\":\"8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918\",\"deletions\":38,\"files_changed\":3,\"insertions\":214,\"repository\":\"https://github.com/ageprotocol/demo\",\"tests\":\"passed\",\"type\":\"git.commit\"},\"agent\":\"age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"environment\":{\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"runtime\":\"claude-code/2.1.0\",\"workspace\":\"github.com/ageprotocol/demo\"},\"id\":\"sha256:9701e8874d3057f99ef7ecb5b3d0962682961227375e330c0cbf9ab606af7afb\",\"inputs\":[{\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"prompt\"}],\"outputs\":[{\"digest\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"commit\",\"ref\":\"8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918\"}],\"policy\":{\"decision\":\"allowed\",\"hash\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"id\":\"default\",\"version\":\"1\"},\"receipt_version\":\"0.1\",\"signatures\":[{\"alg\":\"Ed25519\",\"key\":{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI\"},\"role\":\"agent\",\"signature\":\"6Rh-IW9vgOGt0AYAMEA6Ei0n8sg8W-iZdbTVRKvl437Z4EHNKwv9olZJexNbeMfyCp6oxlA_HZp-6vLadohwBA\",\"signer\":\"age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\"},{\"alg\":\"Ed25519\",\"jwks\":\"https://registry.ageprotocol.dev/.well-known/age-jwks.json\",\"registered_at\":\"2026-09-05T03:20:04Z\",\"role\":\"registry\",\"sequence\":184,\"signature\":\"qFI1q2od7ANpq3lXaCU5HFAgY_TThj76YnVHpFX2UNiDtTEP6LunrjA4kKZomc_XW6i-EGBeG0cp58rTx6E9BQ\",\"signer\":\"age:registry:kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\"}],\"task\":{\"description\":\"Fix authentication bug\",\"id\":\"tsk_91\"},\"timestamp\":\"2026-09-05T03:20:00Z\"}",
       "{\"action\":{\"failed\":0,\"passed\":412,\"suite\":\"release\",\"type\":\"test.run\"},\"agent\":\"age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"environment\":{\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"runtime\":\"claude-code/2.1.0\",\"🔧\":\"cargo 1.89.0\",\"￿\":\"canonicalization sentinel\"},\"id\":\"sha256:47b28312696dbc708d3137c6ca20603722a82ff519e1a5824c81dc09e0bd6522\",\"inputs\":[{\"digest\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"commit\",\"ref\":\"8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918\"}],\"outputs\":[{\"digest\":\"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"kind\":\"report\"}],\"policy\":null,\"receipt_version\":\"0.1\",\"signatures\":[{\"alg\":\"Ed25519\",\"key\":{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI\"},\"role\":\"agent\",\"signature\":\"ITo-V2hgo1U7ymczle6dKau0fh9KcTqpWKRQMwzDlKygGij8tQqCuJ6LrZpYt-bXYX2pQmYPbvqDchBK60BlBA\",\"signer\":\"age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\"},{\"alg\":\"Ed25519\",\"jwks\":\"https://registry.ageprotocol.dev/.well-known/age-jwks.json\",\"registered_at\":\"2026-09-05T03:41:12Z\",\"role\":\"registry\",\"sequence\":185,\"signature\":\"9a-yQ3tP8YXd6PrxT83NCzYVbfme2UidoTtkhIqKjvSb-JN7b__ktdfzfEZlEgJ0WbAJx0jzGqy-d0bLeXmHAQ\",\"signer\":\"age:registry:kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\"}],\"task\":{\"description\":\"Run the release test suite\",\"id\":\"tsk_92\"},\"timestamp\":\"2026-09-05T03:41:08Z\"}",
-      "{\"action\":{\"operations\":1e+21,\"regressions\":1,\"seconds\":0.5,\"suite\":\"canonicalization\",\"type\":\"benchmark.run\"},\"agent\":\"age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"environment\":{\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"runtime\":\"claude-code/2.1.0\"},\"id\":\"sha256:6eace589bef94f159b8bf5e6e39d5c565f83d4abd6f2e82a471275565738ead5\",\"inputs\":[{\"digest\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"commit\",\"ref\":\"8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918\"}],\"outputs\":[{\"digest\":\"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"kind\":\"report\"}],\"policy\":null,\"receipt_version\":\"0.1\",\"signatures\":[{\"alg\":\"Ed25519\",\"key\":{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI\"},\"role\":\"agent\",\"signature\":\"CjupEZ8QxTdkiSpzt9kDeAASiO_eQxKMZDXgS_-O6bToHXfKYVWilITK_ZZ1hErHH_l64ENQCc_ebsoZzyNsBQ\",\"signer\":\"age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\"},{\"alg\":\"Ed25519\",\"jwks\":\"https://registry.ageprotocol.dev/.well-known/age-jwks.json\",\"registered_at\":\"2026-09-05T04:02:57Z\",\"role\":\"registry\",\"sequence\":186,\"signature\":\"Pl3SOG_2LJrLfRbRkJ0cQboQBMqhhIaTKm064ak1yi8jDO0XCykOrO7vpc96rqdJmkABW0fqS7tSMWBQ8OUgDA\",\"signer\":\"age:registry:kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\"}],\"task\":{\"description\":\"Benchmark the canonicalizer\",\"id\":\"tsk_93\"},\"timestamp\":\"2026-09-05T04:02:51Z\"}"
+      "{\"action\":{\"drift\":-1,\"microseconds\":500000,\"operations\":9007199254740991,\"regressions\":1,\"suite\":\"canonicalization\",\"type\":\"benchmark.run\"},\"agent\":\"age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\",\"environment\":{\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"runtime\":\"claude-code/2.1.0\"},\"id\":\"sha256:8f61495ea8c53b58ae9a8ee2ee7775f751fc1b4c4d18da7d5a3088c6e6378b9c\",\"inputs\":[{\"digest\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"commit\",\"ref\":\"8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918\"}],\"outputs\":[{\"digest\":\"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"kind\":\"report\"}],\"policy\":null,\"receipt_version\":\"0.1\",\"signatures\":[{\"alg\":\"Ed25519\",\"key\":{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI\"},\"role\":\"agent\",\"signature\":\"DBlRROOkSzhjQozxs_rtEy-mNBh1HQKSVt_f2S3jK7bSP93wTt-yNvb_VSOy8IykcSATMH_nHLGEASWKF0ycDg\",\"signer\":\"age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw\"},{\"alg\":\"Ed25519\",\"jwks\":\"https://registry.ageprotocol.dev/.well-known/age-jwks.json\",\"registered_at\":\"2026-09-05T04:02:57Z\",\"role\":\"registry\",\"sequence\":186,\"signature\":\"6ZefNj-ZYu7S76puKMW2aXu9RC9JAA19Z0gYqa5FUJz8WoTDpLHK06WAoy0IOeySEypRM3R2hO3bUK4xLPAWDA\",\"signer\":\"age:registry:kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM\"}],\"task\":{\"description\":\"Benchmark the canonicalizer\",\"id\":\"tsk_93\"},\"timestamp\":\"2026-09-05T04:02:51Z\"}"
     ]
   }
 }
