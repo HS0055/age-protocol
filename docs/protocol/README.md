@@ -191,10 +191,20 @@ The receipt is self-certifying: `age:agent:` plus the thumbprint of the
 embedded key must equal both the entry's `signer` and the core's `agent`, and
 the core's `agent` is inside the signed bytes.
 
-`alg` must be `Ed25519` on an `agent` or `registry` entry. Roles a verifier
-does not know are reported and skipped, never judged, so `runtime`,
-`hardware`, and `organization` signers can be added later without breaking
-verifiers written against v0.1.
+`alg` must be `Ed25519` on an `agent` or `registry` entry. An entry whose
+`role` is a string the verifier does not know is reported and skipped, never
+judged, so `runtime`, `hardware`, and `organization` signers can be added
+later without breaking verifiers written against v0.1. An entry that is not an
+object, or whose `role` is not a string, is not a signature at all and fails:
+skipping it would let arbitrary content ride inside the array unreported.
+
+Two consequences of the counting rules are worth stating plainly, because both
+are correct and neither is obvious. A byte-identical duplicate of a valid
+registry entry verifies, and appears as two passing numbered checks; it is
+redundant, not forged. And removing every registry entry from a receipt leaves
+a valid unregistered receipt, so a verifier reports the registry check as
+skipped rather than failed. A registry countersignature is evidence a receipt
+was recorded, and its absence is not evidence of anything.
 
 ## Registry attestation
 

@@ -1,5 +1,5 @@
 import {
-  isPublicJwk, keyMapFromJwks, verifyReceipt, verifyRoot, verifyRootInclusion, registrySignatureOf,
+  isPublicJwk, keyMapFromJwks, verifyReceipt, verifyRoot, verifyRootInclusion, registrySignaturesOf,
   type Check, type CheckStatus, type PublicJwk, type Receipt, type RootDocument, type RootProof,
 } from '@ageprotocol/receipts';
 
@@ -81,13 +81,12 @@ function receiptProblem(value: unknown): string | undefined {
   if (typeof value.agent !== 'string') return 'receipt agent must be a string';
   if (!isObject(value.action) || typeof value.action.type !== 'string') return 'receipt action.type must be a string';
   if (!Array.isArray(value.inputs) || !Array.isArray(value.outputs)) return 'receipt inputs and outputs must be arrays';
+  // Deliberately no per-entry shape check here. verifyReceipt judges every
+  // entry and reports the bad ones, and roles this version does not know are
+  // meant to be carried without breaking anything. Rejecting the whole file
+  // for an entry shaped differently would make the reference verifier the
+  // first thing to break when a runtime or hardware signer appears.
   if (!Array.isArray(value.signatures)) return 'receipt signatures must be an array';
-  for (let i = 0; i < value.signatures.length; i += 1) {
-    const entry: unknown = value.signatures[i];
-    if (!isObject(entry) || typeof entry.role !== 'string' || typeof entry.signer !== 'string' || typeof entry.signature !== 'string') {
-      return `receipt signature ${i} must have role, signer, and signature strings`;
-    }
-  }
   return undefined;
 }
 
@@ -164,17 +163,24 @@ async function readInputs(parsed: ParsedArgs, io: VerifyIo): Promise<Inputs> {
   reject(receiptProblem(rawReceipt));
   const receipt = rawReceipt as Receipt;
 
+  // Every registry entry has to be checked, so every registry's key has to be
+  // available. Loading only the first one made a receipt countersigned by two
+  // registries always fail, since the second key could never be found.
   let registryKeys: PublicJwk[] = [];
-  let keySource = 'none';
-  const hint = registrySignatureOf(receipt)?.jwks;
-  const location = parsed.jwks ?? (parsed.offline ? undefined : hint);
-  if (location !== undefined) {
+  const sources: string[] = [];
+  const hints = parsed.jwks !== undefined
+    ? [parsed.jwks]
+    : parsed.offline
+      ? []
+      : [...new Set(registrySignaturesOf(receipt).map((entry) => entry.jwks).filter((jwks): jwks is string => typeof jwks === 'string'))];
+  for (const location of hints) {
     if (parsed.offline && isUrl(location)) throw new Error(`--offline forbids fetching ${location}`);
     const rawJwks = await readJson(io, location);
     reject(jwksProblem(rawJwks));
-    registryKeys = (rawJwks as { keys: PublicJwk[] }).keys;
-    keySource = location;
+    registryKeys = [...registryKeys, ...(rawJwks as { keys: PublicJwk[] }).keys];
+    sources.push(location);
   }
+  const keySource = sources.length === 0 ? 'none' : sources.join(', ');
 
   const inputs: Inputs = { receipt, registryKeys, keySource };
   if (parsed.root !== undefined && parsed.proof !== undefined) {

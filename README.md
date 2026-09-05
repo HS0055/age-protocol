@@ -151,8 +151,9 @@ Tests run straight from TypeScript source using Node's native type stripping.
 third-party runtime dependency: `@ageprotocol/receipts` has none at all, and
 the CLI depends only on it. Everything cryptographic comes from `node:crypto`.
 
-The interop test needs `python3` with the `cryptography` package to run the
-second implementation; without it that one test skips rather than fails.
+The interop tests need `python3` with the `cryptography` package to run the
+second implementation; without it those six tests skip rather than fail. CI
+installs it, so they always run there.
 
 ## Status
 

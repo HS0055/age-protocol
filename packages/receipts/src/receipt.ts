@@ -177,10 +177,19 @@ export function registrySignaturesOf(receipt: Receipt): RegistrySignature[] {
   return entriesWithRole(receipt, 'registry') as unknown as RegistrySignature[];
 }
 
+// The singular forms below return the FIRST entry of a role and ignore the
+// rest. Taking the first entry and ignoring the rest is precisely how a
+// forged second registry entry once rode along invisibly, so nothing that
+// decides a verdict may use them: use agentSignaturesOf and
+// registrySignaturesOf, and account for every entry. These remain for callers
+// that want a display value from a receipt already verified.
+
+/** The first agent entry. Never use this to decide a verdict; see the note above. */
 export function agentSignatureOf(receipt: Receipt): AgentSignature | undefined {
   return agentSignaturesOf(receipt)[0];
 }
 
+/** The first registry entry. Never use this to decide a verdict; see the note above. */
 export function registrySignatureOf(receipt: Receipt): RegistrySignature | undefined {
   return registrySignaturesOf(receipt)[0];
 }

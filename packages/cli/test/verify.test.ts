@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   agentSign, registrySign, buildRoot, proofFor, generateKeyPair, agentIdOf, registryIdOf, bareJwk,
   RECEIPT_VERSION, type Receipt, type ReceiptCore,
+  toPublicJwk, signBytes, registrySigningInput,
 } from '@ageprotocol/receipts';
 import { runVerify } from '../src/verify.ts';
 
@@ -190,4 +191,45 @@ test('a forged second registry entry is labelled by position and fails with exit
   assert.equal(out[3], `\u2713 Registry signature 1   ${REGISTRY_SIGNER}  sequence #184`);
   assert.match(out[4] ?? '', /^\u2717 Registry signature 2   registry key age:registry:/);
   assert.equal(out.at(-1), 'FAILED');
+});
+
+test('a receipt countersigned by two registries loads both keys and passes both checks', async () => {
+  // Every registry entry is now checked and an unobtainable key is a
+  // failure, so loading only the first entry's hint made a two-registry
+  // receipt fail no matter what the caller did short of hand-building a
+  // combined jwks file.
+  const second = generateKeyPair();
+  const SECOND_URL = 'https://second.test/.well-known/age-jwks.json';
+  const signer = registryIdOf(bareJwk(toPublicJwk(second.privateJwk)));
+  const fields = { sequence: 7, registered_at: '2026-09-05T05:00:00Z', signer };
+  const both: Receipt = {
+    ...receipt,
+    signatures: [...receipt.signatures, {
+      role: 'registry', signer, alg: 'Ed25519', sequence: fields.sequence,
+      registered_at: fields.registered_at, jwks: SECOND_URL,
+      signature: signBytes(registrySigningInput(receipt, fields), second.privateJwk),
+    }],
+  };
+
+  const { io, out, fetched } = harness({ 'both.json': both }, {
+    urls: { [SECOND_URL]: { keys: [bareJwk(second.publicJwk)] } },
+  });
+  const code = await runVerify(['both.json'], io);
+  assert.equal(code, 0, out.join('\n'));
+  assert.deepEqual(fetched.sort(), [JWKS_URL, SECOND_URL].sort());
+  assert.match(out.join('\n'), /✓ Registry signature 1/);
+  assert.match(out.join('\n'), /✓ Registry signature 2/);
+});
+
+test('an unknown signature role does not make the CLI reject the file', async () => {
+  // The extensibility promise: a runtime or hardware entry shaped differently
+  // is reported, not treated as a malformed receipt.
+  const withRuntime: Receipt = {
+    ...receipt,
+    signatures: [...receipt.signatures, { role: 'runtime', attestation: { tee: 'sev-snp' } } as never],
+  };
+  const { io, out } = harness({ 'future.json': withRuntime });
+  const code = await runVerify(['future.json', '--jwks', 'jwks.json'], io);
+  assert.equal(code, 0, out.join('\n'));
+  assert.match(out.join('\n'), /- Runtime signature\s+unknown role, not checked/);
 });
