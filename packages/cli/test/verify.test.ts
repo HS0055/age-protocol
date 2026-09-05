@@ -25,7 +25,7 @@ function core(overrides: Partial<ReceiptCore> = {}): ReceiptCore {
 const unregistered = agentSign(core(), agent.privateJwk);
 const receipt = registrySign(unregistered, { sequence: 184, registered_at: '2026-09-05T03:20:04Z', jwks: JWKS_URL }, registry.privateJwk);
 const root = buildRoot([receipt], '2026-09-05', registry.privateJwk);
-const proof = proofFor([receipt], receipt);
+const proof = proofFor([receipt], receipt, root.registry);
 const jwks = { keys: [bareJwk(registry.publicJwk)] };
 
 function harness(extraFiles: Record<string, unknown> = {}, options: { commitExists?: boolean; urls?: Record<string, unknown> } = {}) {

@@ -68,6 +68,6 @@ test('the daily root and proof are reproduced and verify', () => {
   assert.equal(Buffer.from(rootSigningInput(root)).toString('utf8'), golden.root.signing_input);
   assert.deepEqual([Buffer.from(canonicalBytes(golden.receipt)).toString('utf8')], golden.root.leaves);
   assert.equal(verifyRoot(golden.root.document, [golden.keys.registry_public]), true);
-  assert.deepEqual(proofFor([golden.receipt], golden.receipt), golden.proof);
+  assert.deepEqual(proofFor([golden.receipt], golden.receipt, golden.keys.registry_id), golden.proof);
   assert.equal(verifyRootInclusion(golden.receipt, golden.proof, golden.root.document), true);
 });

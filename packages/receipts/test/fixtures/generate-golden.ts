@@ -60,7 +60,7 @@ const registryEntry = registrySignatureOf(receipt);
 if (!registryEntry) throw new Error('golden receipt has no registry signature');
 const attestation = attestationOf(receipt, registryEntry);
 const root = buildRoot([receipt], '2026-09-05', REGISTRY_PRIVATE);
-const proof = proofFor([receipt], receipt);
+const proof = proofFor([receipt], receipt, REGISTRY_ID);
 
 const golden = {
   note: 'Golden interop vector for AGE Protocol v0.1. Fixed keys, fixed content, byte-identical output. Ed25519 is deterministic, so a conforming implementation reproduces every id and signature here.',

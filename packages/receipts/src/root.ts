@@ -1,7 +1,7 @@
 import { canonicalBytes } from './canonical.ts';
 import { bareJwk, keyMapFromJwks, toPublicJwk, type PrivateJwk, type PublicJwk } from './keys.ts';
 import { inclusionProof, merkleRoot, verifyInclusion, type InclusionProof } from './merkle.ts';
-import { DIGEST_PREFIX, REGISTRY_ID_PREFIX, registryIdOf, registrySignatureFor, registrySignatureOf, thumbprintOfId, type Receipt } from './receipt.ts';
+import { DIGEST_PREFIX, REGISTRY_ID_PREFIX, registryIdOf, registrySignatureFor, thumbprintOfId, type Receipt } from './receipt.ts';
 import { signBytes, verifyBytes } from './signature.ts';
 
 export const ROOT_VERSION = '0.1';
@@ -23,18 +23,35 @@ export interface RootProof extends InclusionProof {
   sequence: number;
 }
 
-export function sequenceOf(receipt: Receipt): number {
-  const entry = registrySignatureOf(receipt);
-  if (!entry) throw new Error('receipt is not registered');
+// A sequence belongs to a registry, not to a receipt: the same receipt can be
+// registered by two registries at two different numbers, so every question
+// about sequence names the registry it is asking about.
+export function sequenceOf(receipt: Receipt, registryId: string): number {
+  const entry = registrySignatureFor(receipt, registryId);
+  if (!entry) throw new Error(`receipt is not registered by ${registryId}`);
   return entry.sequence;
 }
 
-function bySequence(receipts: Receipt[]): Receipt[] {
-  return [...receipts].sort((a, b) => sequenceOf(a) - sequenceOf(b));
+function bySequence(receipts: Receipt[], registryId: string): Receipt[] {
+  return [...receipts].sort((a, b) => sequenceOf(a, registryId) - sequenceOf(b, registryId));
 }
 
-export function rootLeaves(receipts: Receipt[]): Uint8Array[] {
-  return bySequence(receipts).map((receipt) => canonicalBytes(receipt));
+// An inclusion proof derives the tree size and the leaf index from the
+// sequence range alone, so a root over a range with a gap or a repeat is one
+// whose every proof fails. A registry learns that here, not from a verifier.
+function orderedRun(receipts: Receipt[], registryId: string, caller: string): Receipt[] {
+  const ordered = bySequence(receipts, registryId);
+  for (let i = 1; i < ordered.length; i += 1) {
+    const previous = sequenceOf(ordered[i - 1] as Receipt, registryId);
+    const current = sequenceOf(ordered[i] as Receipt, registryId);
+    if (current === previous) throw new Error(`${caller}: sequence ${current} appears twice`);
+    if (current !== previous + 1) throw new Error(`${caller}: sequences ${previous} and ${current} are not consecutive`);
+  }
+  return ordered;
+}
+
+export function rootLeaves(receipts: Receipt[], registryId: string): Uint8Array[] {
+  return bySequence(receipts, registryId).map((receipt) => canonicalBytes(receipt));
 }
 
 export function rootSigningInput(doc: Omit<RootDocument, 'signature'> | RootDocument): Uint8Array {
@@ -44,25 +61,26 @@ export function rootSigningInput(doc: Omit<RootDocument, 'signature'> | RootDocu
 
 export function buildRoot(receipts: Receipt[], date: string, registryPrivate: PrivateJwk): RootDocument {
   if (receipts.length === 0) throw new Error('buildRoot: no receipts');
-  const ordered = bySequence(receipts);
+  const registry = registryIdOf(bareJwk(toPublicJwk(registryPrivate)));
+  const ordered = orderedRun(receipts, registry, 'buildRoot');
   const leaves = ordered.map((receipt) => canonicalBytes(receipt));
   const unsigned = {
     root_version: ROOT_VERSION,
-    registry: registryIdOf(bareJwk(toPublicJwk(registryPrivate))),
+    registry,
     date,
-    sequence_start: sequenceOf(ordered[0] as Receipt),
-    sequence_end: sequenceOf(ordered[ordered.length - 1] as Receipt),
+    sequence_start: sequenceOf(ordered[0] as Receipt, registry),
+    sequence_end: sequenceOf(ordered[ordered.length - 1] as Receipt, registry),
     root: `${DIGEST_PREFIX}${merkleRoot(leaves).toString('hex')}`,
   } satisfies Omit<RootDocument, 'signature'>;
   return { ...unsigned, signature: signBytes(canonicalBytes(unsigned), registryPrivate) };
 }
 
-export function proofFor(receipts: Receipt[], receipt: Receipt): RootProof {
-  const ordered = bySequence(receipts);
+export function proofFor(receipts: Receipt[], receipt: Receipt, registryId: string): RootProof {
+  const ordered = orderedRun(receipts, registryId, 'proofFor');
   const index = ordered.findIndex((candidate) => candidate.id === receipt.id);
   if (index < 0) throw new Error('proofFor: receipt is not among the root leaves');
   const leaves = ordered.map((candidate) => canonicalBytes(candidate));
-  return { sequence: sequenceOf(receipt), ...inclusionProof(leaves, index) };
+  return { sequence: sequenceOf(receipt, registryId), ...inclusionProof(leaves, index) };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
