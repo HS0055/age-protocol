@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { leafHash, merkleRoot, inclusionProof, verifyInclusion, type InclusionProof } from '../src/index.ts';
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -62,4 +63,51 @@ test('verifyInclusion rejects a malformed path instead of throwing', () => {
   for (const path of [5, undefined, null, 'abc', [1], [null], [['x']], ['zz'.repeat(32)], ['abcd']]) {
     assert.equal(verifyInclusion(enc('a'), withPath(path), root), false, `path ${JSON.stringify(path)}`);
   }
+});
+
+// A tree larger than 2**32 leaves. JavaScript's >>> and & coerce to 32 bits,
+// so sn truncated to a small number partway up the walk and correct proofs
+// were rejected. A release review found 136 such cases in an honest sweep;
+// none of them is reachable by building an actual tree, so the expected root
+// is computed here by an independent BigInt walk of RFC 9162 section 2.1.3.2.
+test('inclusion holds for trees larger than 2^32 leaves', () => {
+  const node = (l: Buffer, r: Buffer) =>
+    createHash('sha256').update(Buffer.concat([Buffer.from([1]), l, r])).digest();
+
+  const expectedRoot = (leaf: Uint8Array, path: string[], index: number, size: number) => {
+    let fn = BigInt(index);
+    let sn = BigInt(size) - 1n;
+    let r = leafHash(leaf);
+    for (const entry of path) {
+      if (sn === 0n) return undefined;
+      const p = Buffer.from(entry, 'hex');
+      if (fn % 2n === 1n || fn === sn) {
+        r = node(p, r);
+        if (fn % 2n === 0n) {
+          while (fn % 2n === 0n && fn !== 0n) { fn /= 2n; sn /= 2n; }
+        }
+      } else {
+        r = node(r, p);
+      }
+      fn /= 2n;
+      sn /= 2n;
+    }
+    return sn === 0n ? r.toString('hex') : undefined;
+  };
+
+  const leaf = Buffer.from('a receipt in a very large day');
+  // 2^32 was already fine because sn is then 2^32 - 1 and still fits; 2^32 + 1
+  // is the first size that truncated. 2^53 is the largest the format allows.
+  for (const size of [2 ** 32, 2 ** 32 + 1, 2 ** 40, 2 ** 52, 2 ** 53 - 1]) {
+    const depth = Math.ceil(Math.log2(size));
+    const path = Array.from({ length: depth }, (_, i) =>
+      createHash('sha256').update(`sibling ${i}`).digest().toString('hex'));
+    const root = expectedRoot(leaf, path, 4, size);
+    assert.ok(root, `the oracle produced a root for size ${size}`);
+    assert.equal(verifyInclusion(leaf, { index: 4, size, path }, root), true,
+      `a correct proof in a tree of ${size} leaves must verify`);
+  }
+
+  // A size beyond the safe integer range is not a size.
+  assert.equal(verifyInclusion(leaf, { index: 0, size: 2 ** 53 + 2, path: [] }, 'a'.repeat(64)), false);
 });

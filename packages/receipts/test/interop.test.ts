@@ -52,7 +52,10 @@ function runReceipt(receipt: unknown) {
 // erases the difference between 3 and 3.0 before Python ever sees it, which
 // is precisely the case being compared.
 function runReceiptText(text: string) {
-  return spawnSync(PYTHON as string, [VERIFIER, VECTOR, text, '--no-root'], { encoding: 'utf8' });
+  // --no-commit as well as --no-root: verifyReceipt performs neither check,
+  // so including them would compare a different question and report a
+  // disagreement where the two implementations actually agree.
+  return spawnSync(PYTHON as string, [VERIFIER, VECTOR, text, '--no-root', '--no-commit'], { encoding: 'utf8' });
 }
 
 // Asks verify.py for the root verdict alone, so it can be compared against

@@ -448,12 +448,17 @@ def verify(receipt: dict, registry_jwks: list, root_doc=None, proof=None):
     return checks
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if a != "--no-root"]
+    args = [a for a in sys.argv[1:] if a not in ("--no-root", "--no-commit")]
     # A Merkle leaf is the whole receipt, so any change to the signature array
     # puts the receipt outside the published root even when the receipt itself
     # is fine. --no-root asks only "is this receipt valid", which is the
     # question to ask when comparing two implementations entry by entry.
     skip_root = "--no-root" in sys.argv
+    # Commit binding is a check the reference library does not perform; it
+    # lives in the command line tool. Comparing a run that has it against a
+    # library that does not compares different questions, so a differential
+    # test asks for it to be left out.
+    skip_commit = "--no-commit" in sys.argv
     g = json.load(open(args[0]))
     keys, root_doc = [g["keys"]["registry_public"]], (None if skip_root else g["root"]["document"])
     sys.argv = [sys.argv[0], *args]
@@ -475,7 +480,8 @@ if __name__ == "__main__":
         # The specification requires a verdict for any input, including input
         # that is not a receipt at all. An exception is not a verdict.
         try:
-            results = verify(receipt, keys, root_doc, item["proof"])
+            results = [r for r in verify(receipt, keys, root_doc, item["proof"])
+                       if not (skip_commit and r[0] == "Commit binding")]
         except Exception as error:                                  # noqa: BLE001
             results = [("Receipt integrity", False, f"{type(error).__name__}: {error}")]
         for name, ok, detail in results:

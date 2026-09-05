@@ -62,9 +62,18 @@ export function inclusionProof(leaves: Uint8Array[], index: number): InclusionPr
 const HEX_32_BYTES = /^[0-9a-f]{64}$/;
 
 // RFC 9162 section 2.1.3.2. A malformed proof is a false, never an exception.
+//
+// The walk uses division and remainder rather than the bitwise operators the
+// RFC's pseudocode implies. JavaScript's >>> and & coerce to 32 bits, so a
+// tree with more than 2**32 leaves made sn truncate to a small number and the
+// walk was abandoned partway, rejecting proofs that are correct. Arithmetic
+// is exact to 2**53, which is the range the format allows anyway.
 export function verifyInclusion(leafData: Uint8Array, proof: InclusionProof, rootHex: string): boolean {
-  if (!Number.isInteger(proof.index) || proof.index < 0 || proof.index >= proof.size) return false;
+  if (!Number.isSafeInteger(proof.size) || proof.size < 1) return false;
+  if (!Number.isSafeInteger(proof.index) || proof.index < 0 || proof.index >= proof.size) return false;
   if (!Array.isArray(proof.path)) return false;
+  const isRight = (n: number) => n % 2 === 1;
+  const up = (n: number) => Math.floor(n / 2);
   let fn = proof.index;
   let sn = proof.size - 1;
   let r: Buffer = leafHash(leafData);
@@ -72,19 +81,19 @@ export function verifyInclusion(leafData: Uint8Array, proof: InclusionProof, roo
     if (sn === 0) return false;
     if (typeof entry !== 'string' || !HEX_32_BYTES.test(entry)) return false;
     const p = Buffer.from(entry, 'hex');
-    if ((fn & 1) === 1 || fn === sn) {
+    if (isRight(fn) || fn === sn) {
       r = nodeHash(p, r);
-      if ((fn & 1) === 0) {
-        while ((fn & 1) === 0 && fn !== 0) {
-          fn >>>= 1;
-          sn >>>= 1;
+      if (!isRight(fn)) {
+        while (!isRight(fn) && fn !== 0) {
+          fn = up(fn);
+          sn = up(sn);
         }
       }
     } else {
       r = nodeHash(r, p);
     }
-    fn >>>= 1;
-    sn >>>= 1;
+    fn = up(fn);
+    sn = up(sn);
   }
   return sn === 0 && r.toString('hex') === rootHex.toLowerCase();
 }
