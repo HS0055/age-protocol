@@ -61,3 +61,8 @@ export function publicKeyFromJwk(jwk: PublicJwk): KeyObject {
 export function privateKeyFromJwk(jwk: PrivateJwk): KeyObject {
   return createPrivateKey({ key: { kty: jwk.kty, crv: jwk.crv, x: jwk.x, d: jwk.d }, format: 'jwk' });
 }
+
+// The three required members and nothing else, which is what a receipt embeds.
+export function bareJwk(jwk: PublicJwk): PublicJwk {
+  return { kty: jwk.kty, crv: jwk.crv, x: jwk.x };
+}

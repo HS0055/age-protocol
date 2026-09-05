@@ -1,221 +1,168 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  generateKeyPair, nodeSign, cloudSign, receiptHash, verifyReceipt, thumbprint,
-  nodeSigningInput, cloudSigningInput, keyMapFromJwks, RECEIPT_TYP,
-  type ReceiptEnvelope, type Receipt,
+  agentSign, registrySign, verifyReceipt, receiptIdOf, agentIdOf, registryIdOf, thumbprintOfId, coreOf,
+  agentSignatureOf, registrySignatureOf, attestationOf, canonicalize, canonicalBytes, generateKeyPair, bareJwk,
+  keyMapFromJwks, sha256Digest, AGENT_ID_PREFIX, REGISTRY_ID_PREFIX, RECEIPT_VERSION, ATTESTATION_VERSION,
+  type Receipt, type ReceiptCore,
 } from '../src/index.ts';
 
-const node = generateKeyPair();
-const cloud = generateKeyPair();
+const agent = generateKeyPair();
+const registry = generateKeyPair();
 const stranger = generateKeyPair();
+const AGENT_ID = agentIdOf(agent.publicJwk);
+const ASSIGNED = { sequence: 184, registered_at: '2026-09-05T03:20:04Z', jwks: 'https://registry.test/.well-known/age-jwks.json' };
 
-function envelope(overrides: Partial<ReceiptEnvelope> = {}): ReceiptEnvelope {
+function core(overrides: Partial<ReceiptCore> = {}): ReceiptCore {
   return {
-    typ: RECEIPT_TYP,
-    v: 1,
-    ts: '2026-09-04T14:02:11Z',
-    company: 'org_sayge',
-    mission: 'msn_482',
-    task: 'tsk_91',
-    run: 'run_7',
-    actor: { type: 'agent', jkt: 'agentjkt', level: 0 },
-    node: { jkt: thumbprint(node.publicJwk) },
-    cloud: { jkt: thumbprint(cloud.publicJwk) },
-    action: { type: 'git.commit', ref: 'abc123', files: 3 },
-    inputs: [{ kind: 'prompt_bundle', sha256: 'aa'.repeat(32) }],
-    outputs: [{ kind: 'diff', sha256: 'bb'.repeat(32) }],
-    gate: null,
+    receipt_version: RECEIPT_VERSION,
+    agent: AGENT_ID,
+    timestamp: '2026-09-05T03:20:00Z',
+    task: { id: 'tsk_91', description: 'Fix authentication bug' },
+    action: { type: 'git.commit', commit: '8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918', files_changed: 3, tests: 'passed' },
+    inputs: [{ kind: 'prompt', digest: `sha256:${'aa'.repeat(32)}` }],
+    outputs: [{ kind: 'commit', digest: `sha256:${'bb'.repeat(32)}`, ref: '8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918' }],
+    environment: { runtime: 'claude-code/2.1.0', workspace: 'github.com/ageprotocol/demo' },
+    policy: null,
     ...overrides,
   };
 }
 
-const assigned = { id: 'rcpt_01J8TEST0000000000000001', seq: 1207, prev: null };
-
-function issue(overrides: Partial<ReceiptEnvelope> = {}): Receipt {
-  return cloudSign(nodeSign(envelope(overrides), node.privateJwk), assigned, cloud.privateJwk);
+function registered(overrides: Partial<ReceiptCore> = {}): Receipt {
+  return registrySign(agentSign(core(overrides), agent.privateJwk), ASSIGNED, registry.privateJwk);
 }
 
-test('node then cloud signatures verify', () => {
-  const result = verifyReceipt(issue(), [node.publicJwk, cloud.publicJwk]);
-  assert.deepEqual(result, { ok: true, node: 'valid', cloud: 'valid', errors: [] });
+function statuses(receipt: Receipt, keys = [registry.publicJwk]) {
+  return Object.fromEntries(verifyReceipt(receipt, { registryKeys: keys }).checks.map((c) => [c.name, c.status]));
+}
+
+test('agentSign derives the id from the canonical core and embeds the bare public key', () => {
+  const signed = agentSign(core(), agent.privateJwk);
+  assert.equal(signed.id, sha256Digest(canonicalBytes(core())));
+  assert.equal(signed.id, receiptIdOf(signed));
+  assert.match(signed.id, /^sha256:[0-9a-f]{64}$/);
+  assert.equal(signed.signatures.length, 1);
+  const entry = agentSignatureOf(signed);
+  assert.ok(entry);
+  assert.deepEqual(entry.key, bareJwk(agent.publicJwk));
+  assert.equal(entry.signer, AGENT_ID);
+  assert.equal(entry.alg, 'Ed25519');
+  assert.equal(entry.signature.length, 86);
+  assert.deepEqual(coreOf(signed), core());
 });
 
-test('the node signing input excludes the cloud-assigned fields', () => {
-  const signed = nodeSign(envelope(), node.privateJwk);
-  const receipt = cloudSign(signed, assigned, cloud.privateJwk);
-  assert.equal('id' in signed, false);
-  assert.equal('seq' in signed, false);
-  assert.equal('prev' in signed, false);
-  assert.deepEqual(nodeSigningInput(receipt), nodeSigningInput(signed));
-  const text = Buffer.from(nodeSigningInput(receipt)).toString('utf8');
-  for (const member of ['"id"', '"seq"', '"prev"', 'node_sig', 'cloud_sig']) {
-    assert.equal(text.includes(member), false, `${member} must not be in the node signing input`);
-  }
+test('the agent id is the key thumbprint with the age:agent: prefix', () => {
+  assert.equal(AGENT_ID, `${AGENT_ID_PREFIX}${agent.publicJwk.kid}`);
+  assert.equal(thumbprintOfId(AGENT_ID, AGENT_ID_PREFIX), agent.publicJwk.kid);
+  assert.equal(thumbprintOfId(AGENT_ID, REGISTRY_ID_PREFIX), undefined);
+  assert.equal(thumbprintOfId('age:agent:', AGENT_ID_PREFIX), undefined);
+  assert.equal(registryIdOf(registry.publicJwk), `${REGISTRY_ID_PREFIX}${registry.publicJwk.kid}`);
 });
 
-test('the node signature survives the cloud assigning id, seq, and prev', () => {
-  const signed = nodeSign(envelope(), node.privateJwk);
-  const first = cloudSign(signed, { id: 'rcpt_a', seq: 1, prev: null }, cloud.privateJwk);
-  const later = cloudSign(signed, { id: 'rcpt_b', seq: 9814, prev: 'cc'.repeat(32) }, cloud.privateJwk);
-  assert.equal(first.node_sig, signed.node_sig);
-  assert.equal(later.node_sig, signed.node_sig);
-  assert.equal(verifyReceipt(first, [node.publicJwk, cloud.publicJwk]).node, 'valid');
-  assert.equal(verifyReceipt(later, [node.publicJwk, cloud.publicJwk]).node, 'valid');
+test('agentSign refuses a core that does not name the signing key, a wrong version, or a missing action type', () => {
+  assert.throws(() => agentSign(core({ agent: agentIdOf(stranger.publicJwk) }), agent.privateJwk), /is not the id of the signing key/);
+  assert.throws(() => agentSign(core({ agent: 'not-an-id' }), agent.privateJwk), /age:agent:/);
+  assert.throws(() => agentSign({ ...core(), receipt_version: '0.0' as '0.1' }, agent.privateJwk), /receipt_version/);
+  assert.throws(() => agentSign(core({ action: {} as { type: string } }), agent.privateJwk), /action\.type/);
 });
 
-test('changing seq after cloud signing breaks only the cloud signature', () => {
-  const tampered: Receipt = { ...issue(), seq: 1208 };
-  const result = verifyReceipt(tampered, [node.publicJwk, cloud.publicJwk]);
-  assert.equal(result.ok, false);
-  assert.equal(result.node, 'valid');
-  assert.equal(result.cloud, 'invalid');
+test('an unregistered receipt verifies with the registry check skipped', () => {
+  const signed = agentSign(core(), agent.privateJwk);
+  const result = verifyReceipt(signed);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.checks.map((c) => [c.name, c.status]), [
+    ['integrity', 'pass'], ['agent_signature', 'pass'], ['agent_identity', 'pass'], ['registry_signature', 'skip'],
+  ]);
 });
 
-test('changing prev after cloud signing breaks only the cloud signature', () => {
-  const tampered: Receipt = { ...issue(), prev: 'dd'.repeat(32) };
-  const result = verifyReceipt(tampered, [node.publicJwk, cloud.publicJwk]);
-  assert.equal(result.node, 'valid');
-  assert.equal(result.cloud, 'invalid');
+test('registrySign appends an attestation over the id, agent, sequence, and time', () => {
+  const receipt = registered();
+  const entry = registrySignatureOf(receipt);
+  assert.ok(entry);
+  assert.equal(entry.signer, registryIdOf(registry.publicJwk));
+  assert.equal(entry.sequence, 184);
+  assert.equal(entry.registered_at, ASSIGNED.registered_at);
+  assert.equal(entry.jwks, ASSIGNED.jwks);
+  assert.deepEqual(attestationOf(receipt, entry), {
+    attestation_version: ATTESTATION_VERSION, receipt: receipt.id, agent: AGENT_ID, sequence: 184,
+    registered_at: ASSIGNED.registered_at, registry: entry.signer,
+  });
+  const result = verifyReceipt(receipt, { registryKeys: [registry.publicJwk] });
+  assert.equal(result.ok, true);
+  assert.deepEqual(statuses(receipt), { integrity: 'pass', agent_signature: 'pass', agent_identity: 'pass', registry_signature: 'pass' });
+  assert.match(result.checks[3]?.detail ?? '', /sequence #184/);
 });
 
-test('tampering with the action breaks both signatures', () => {
-  const tampered: Receipt = { ...issue(), action: { type: 'git.commit', ref: 'evil', files: 3 } };
-  const result = verifyReceipt(tampered, [node.publicJwk, cloud.publicJwk]);
-  assert.equal(result.ok, false);
-  assert.equal(result.node, 'invalid');
-  assert.equal(result.cloud, 'invalid');
+test('registry keys may be given as a JWKS array or a thumbprint map, and kid labels are ignored', () => {
+  const receipt = registered();
+  const mislabelled = { ...bareJwk(stranger.publicJwk), kid: registry.publicJwk.kid };
+  assert.equal(statuses(receipt, [mislabelled]).registry_signature, 'fail');
+  assert.equal(verifyReceipt(receipt, { registryKeys: keyMapFromJwks([registry.publicJwk]) }).ok, true);
+  assert.equal(statuses(receipt, []).registry_signature, 'fail');
+  assert.equal(verifyReceipt(receipt).ok, false);
 });
 
-test('the cloud signing input carries id, seq, prev, and node_sig', () => {
-  const receipt = issue();
-  const text = Buffer.from(cloudSigningInput(receipt)).toString('utf8');
-  assert.equal(text.includes('"id":"rcpt_01J8TEST0000000000000001"'), true);
-  assert.equal(text.includes('"seq":1207'), true);
-  assert.equal(text.includes('"prev":null'), true);
-  assert.equal(text.includes(`"node_sig":"${receipt.node_sig}"`), true);
-  assert.equal(text.includes('cloud_sig'), false);
+test('changing one member of the core breaks integrity and the agent signature', () => {
+  const receipt = registered();
+  const tampered: Receipt = { ...receipt, task: { ...receipt.task, description: 'Fix authentication bug!' } };
+  const s = statuses(tampered);
+  assert.equal(s.integrity, 'fail');
+  assert.equal(s.agent_signature, 'fail');
+  assert.equal(s.agent_identity, 'pass');
+  assert.equal(verifyReceipt(tampered, { registryKeys: [registry.publicJwk] }).ok, false);
+  assert.equal(verifyReceipt(tampered, { registryKeys: [registry.publicJwk] }).checks[0]?.detail, 'mismatch');
 });
 
-test('cloud-only receipt has null node and null node_sig', () => {
-  const r = cloudSign(envelope({ node: null, actor: { type: 'human', id: 'usr_hayk' } }), assigned, cloud.privateJwk);
-  assert.equal(r.node_sig, null);
-  assert.deepEqual(verifyReceipt(r, [cloud.publicJwk]), { ok: true, node: 'absent', cloud: 'valid', errors: [] });
+test('swapping the embedded key for a stranger key fails the signature and the identity', () => {
+  const receipt = registered();
+  const entry = agentSignatureOf(receipt);
+  assert.ok(entry);
+  const swapped: Receipt = { ...receipt, signatures: [{ ...entry, key: bareJwk(stranger.publicJwk) }, ...receipt.signatures.slice(1)] };
+  const s = statuses(swapped);
+  assert.equal(s.agent_signature, 'fail');
+  assert.equal(s.agent_identity, 'fail');
 });
 
-test('a node signature from a stranger is rejected even if the cloud signed it', () => {
-  const r = cloudSign(nodeSign(envelope(), stranger.privateJwk), assigned, cloud.privateJwk);
-  const result = verifyReceipt(r, [node.publicJwk, cloud.publicJwk]);
-  assert.equal(result.ok, false);
-  assert.equal(result.node, 'invalid');
-  assert.equal(result.cloud, 'valid');
+test('a receipt whose agent field disagrees with the signing key fails identity even with a valid signature', () => {
+  const receipt = registered();
+  const forged: Receipt = { ...receipt, agent: agentIdOf(stranger.publicJwk) };
+  forged.id = receiptIdOf(forged);
+  const s = statuses(forged);
+  assert.equal(s.integrity, 'pass');
+  assert.equal(s.agent_signature, 'fail');
+  assert.equal(s.agent_identity, 'fail');
 });
 
-test('unknown keys are reported, not guessed', () => {
-  const result = verifyReceipt(issue(), [cloud.publicJwk]);
-  assert.equal(result.ok, false);
-  assert.equal(result.node, 'unknown_key');
-  assert.match(result.errors[0] ?? '', /node key/);
+test('registrySign refuses a wrong id, a missing agent signature, a second registration, and a bad sequence', () => {
+  const signed = agentSign(core(), agent.privateJwk);
+  assert.throws(() => registrySign({ ...signed, id: `sha256:${'00'.repeat(32)}` }, ASSIGNED, registry.privateJwk), /does not match/);
+  assert.throws(() => registrySign({ ...signed, signatures: [] }, ASSIGNED, registry.privateJwk), /no agent signature/);
+  assert.throws(() => registrySign(registered(), ASSIGNED, registry.privateJwk), /already has a registry signature/);
+  assert.throws(() => registrySign(signed, { ...ASSIGNED, sequence: 0 }, registry.privateJwk), /sequence/);
 });
 
-test('a node present without node_sig is invalid', () => {
-  const r = cloudSign(envelope(), assigned, cloud.privateJwk);
-  const result = verifyReceipt(r, [node.publicJwk, cloud.publicJwk]);
-  assert.equal(result.ok, false);
-  assert.equal(result.node, 'invalid');
+test('a malformed or wrongly keyed registry entry fails, and an unknown role is reported but not judged', () => {
+  const receipt = registered();
+  const entry = registrySignatureOf(receipt);
+  assert.ok(entry);
+  const wrongSequence: Receipt = { ...receipt, signatures: [receipt.signatures[0]!, { ...entry, sequence: 185 }] };
+  assert.equal(statuses(wrongSequence).registry_signature, 'fail');
+  const strangerSigned = registrySign(agentSign(core(), agent.privateJwk), ASSIGNED, stranger.privateJwk);
+  assert.equal(statuses(strangerSigned).registry_signature, 'fail');
+  const withRuntime: Receipt = { ...receipt, signatures: [...receipt.signatures, { role: 'runtime', signer: 'age:runtime:x', alg: 'Ed25519', signature: 'A'.repeat(86) }] };
+  const result = verifyReceipt(withRuntime, { registryKeys: [registry.publicJwk] });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.checks.at(-1), { name: 'runtime_signature', status: 'skip', detail: 'unknown role, not checked' });
 });
 
-test('nodeSign refuses an envelope without a node', () => {
-  assert.throws(() => nodeSign(envelope({ node: null }), node.privateJwk), /no node/);
+test('a wrong receipt_version fails integrity', () => {
+  const receipt = registered();
+  const bumped = { ...receipt, receipt_version: '0.2' } as unknown as Receipt;
+  assert.equal(statuses(bumped).integrity, 'fail');
 });
 
-test('receiptHash is stable and changes with any field', () => {
-  const r = issue();
-  const h1 = receiptHash(r);
-  assert.match(h1, /^[0-9a-f]{64}$/);
-  assert.equal(receiptHash({ ...r }), h1);
-  assert.notEqual(receiptHash({ ...r, seq: 1208 }), h1);
-});
-
-test('the typ is part of the node signing input', () => {
-  const text = Buffer.from(nodeSigningInput(issue())).toString('utf8');
-  assert.equal(text.includes('"typ":"agie/receipt/1"'), true);
-});
-
-test('signing helpers reject an envelope whose typ is wrong', () => {
-  const wrong = { ...envelope(), typ: 'agie/root/1' } as unknown as ReceiptEnvelope;
-  assert.throws(() => nodeSign(wrong, node.privateJwk), /typ/);
-  assert.throws(() => cloudSign(wrong, assigned, cloud.privateJwk), /typ/);
-  const missing = { ...envelope() } as Partial<ReceiptEnvelope>;
-  delete missing.typ;
-  assert.throws(() => nodeSign(missing as ReceiptEnvelope, node.privateJwk), /typ/);
-});
-
-test('verifyReceipt rejects a missing or unexpected typ', () => {
-  const receipt = issue();
-  const keys = [node.publicJwk, cloud.publicJwk];
-  const missing = { ...receipt } as Partial<Receipt>;
-  delete missing.typ;
-  const withoutTyp = verifyReceipt(missing as Receipt, keys);
-  assert.equal(withoutTyp.ok, false);
-  assert.match(withoutTyp.errors[0] ?? '', /typ/);
-  const wrongTyp = verifyReceipt({ ...receipt, typ: 'agie/receipt/2' } as unknown as Receipt, keys);
-  assert.equal(wrongTyp.ok, false);
-  assert.match(wrongTyp.errors[0] ?? '', /typ/);
-});
-
-test('a node may carry its own public jwk', () => {
-  const receipt = cloudSign(
-    nodeSign(envelope({ node: { jkt: thumbprint(node.publicJwk), jwk: node.publicJwk } }), node.privateJwk),
-    assigned,
-    cloud.privateJwk,
-  );
-  assert.deepEqual(receipt.node?.jwk, node.publicJwk);
-  assert.deepEqual(verifyReceipt(receipt, [node.publicJwk, cloud.publicJwk]), { ok: true, node: 'valid', cloud: 'valid', errors: [] });
-});
-
-test('a JWKS entry mislabelled with the node kid does not verify the node signature', () => {
-  const impostor = { ...stranger.publicJwk, kid: thumbprint(node.publicJwk) };
-  const result = verifyReceipt(issue(), [impostor, cloud.publicJwk]);
-  assert.equal(result.ok, false);
-  assert.equal(result.node, 'unknown_key');
-});
-
-test('an embedded node jwk verifies against a JWKS holding only the cloud key', () => {
-  const receipt = cloudSign(
-    nodeSign(envelope({ node: { jkt: thumbprint(node.publicJwk), jwk: node.publicJwk } }), node.privateJwk),
-    assigned,
-    cloud.privateJwk,
-  );
-  assert.deepEqual(verifyReceipt(receipt, [cloud.publicJwk]), { ok: true, node: 'valid', cloud: 'valid', errors: [] });
-});
-
-test('an embedded node jwk whose thumbprint does not match jkt is rejected', () => {
-  const receipt = cloudSign(
-    nodeSign(envelope({ node: { jkt: thumbprint(node.publicJwk), jwk: stranger.publicJwk } }), node.privateJwk),
-    assigned,
-    cloud.privateJwk,
-  );
-  const result = verifyReceipt(receipt, [node.publicJwk, cloud.publicJwk]);
-  assert.equal(result.ok, false);
-  assert.equal(result.node, 'invalid');
-  assert.match(result.errors[0] ?? '', /jwk/);
-});
-
-test('verifyReceipt accepts a prebuilt key map', () => {
-  const map = keyMapFromJwks([node.publicJwk, cloud.publicJwk]);
-  assert.equal(verifyReceipt(issue(), map).ok, true);
-});
-
-test('an envelope carrying an undefined node_sig is signed as node_sig null', () => {
-  const carrier = { ...envelope({ node: null }), node_sig: undefined } as unknown as ReceiptEnvelope;
-  const receipt = cloudSign(carrier, assigned, cloud.privateJwk);
-  assert.equal(receipt.node_sig, null);
-  assert.deepEqual(verifyReceipt(receipt, [cloud.publicJwk]), { ok: true, node: 'absent', cloud: 'valid', errors: [] });
-});
-
-test('a receipt with no node and an undefined node_sig counts as absent', () => {
-  const receipt = cloudSign(envelope({ node: null }), assigned, cloud.privateJwk);
-  const dropped = { ...receipt, node_sig: undefined } as unknown as Receipt;
-  assert.deepEqual(verifyReceipt(dropped, [cloud.publicJwk]), { ok: true, node: 'absent', cloud: 'valid', errors: [] });
+test('the canonical core is what the agent signs', () => {
+  const signed = agentSign(core(), agent.privateJwk);
+  assert.equal(canonicalize(coreOf(signed)), canonicalize(core()));
+  assert.equal(Buffer.from(canonicalBytes(coreOf(signed))).toString('utf8').includes('"signatures"'), false);
 });
