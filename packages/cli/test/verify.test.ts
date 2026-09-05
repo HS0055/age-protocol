@@ -4,7 +4,7 @@ import {
   generateKeyPair, nodeSign, cloudSign, receiptHash, canonicalBytes, merkleRoot, inclusionProof, signBytes, thumbprint,
   RECEIPT_TYP, ROOT_TYP,
   type ReceiptEnvelope, type Receipt,
-} from '@agie/receipts';
+} from '@ageprotocol/receipts';
 import { runVerify } from '../src/verify.ts';
 
 const node = generateKeyPair();

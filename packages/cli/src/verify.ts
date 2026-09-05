@@ -1,7 +1,7 @@
 import {
   canonicalBytes, isPublicJwk, keyMapFromJwks, verifyBytes, verifyChain, verifyInclusion, verifyReceipt, ROOT_TYP,
   type InclusionProof, type PublicJwk, type Receipt,
-} from '@agie/receipts';
+} from '@ageprotocol/receipts';
 
 export interface VerifyIo {
   readFile(path: string): Promise<string>;
@@ -9,7 +9,7 @@ export interface VerifyIo {
   stderr(line: string): void;
 }
 
-export const VERIFY_USAGE = 'usage: agie verify <receipt.json> --jwks <jwks.json> [--chain <receipts.json>] [--root <root.json> --proof <proof.json>]';
+export const VERIFY_USAGE = 'usage: agectl verify <receipt.json> --jwks <jwks.json> [--chain <receipts.json>] [--root <root.json> --proof <proof.json>]';
 
 const KNOWN_FLAGS = ['jwks', 'chain', 'root', 'proof'];
 

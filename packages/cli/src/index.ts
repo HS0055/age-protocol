@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { runVerify, VERIFY_USAGE } from './verify.ts';
 
-const USAGE = ['usage: agie <command>', '', 'commands:', '  verify   verify a receipt offline', '', VERIFY_USAGE].join('\n');
+const USAGE = ['usage: agectl <command>', '', 'commands:', '  verify   verify a receipt offline', '', VERIFY_USAGE].join('\n');
 
 export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;

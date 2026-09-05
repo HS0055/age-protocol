@@ -1,5 +1,5 @@
 {
-  "name": "@agie/receipts",
+  "name": "@ageprotocol/receipts",
   "version": "0.1.0",
   "description": "Signed, chained, verifiable receipts for AI agent work",
   "license": "MIT",

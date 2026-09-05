@@ -1,16 +1,16 @@
 {
-  "name": "@agie/cli",
+  "name": "@ageprotocol/cli",
   "version": "0.1.0",
-  "description": "The agie command line",
+  "description": "agectl, the AGE Protocol command line: verify receipts, manage agent identity",
   "license": "MIT",
   "type": "module",
-  "bin": { "agie": "./bin/agie.mjs" },
+  "bin": { "agectl": "./bin/agectl.mjs" },
   "engines": { "node": ">=22.18" },
   "scripts": {
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@agie/receipts": "workspace:*"
+    "@ageprotocol/receipts": "workspace:*"
   }
 }

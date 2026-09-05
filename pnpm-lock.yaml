@@ -17,7 +17,7 @@ importers:
 
   packages/cli:
     dependencies:
-      '@agie/receipts':
+      '@ageprotocol/receipts':
         specifier: workspace:*
         version: link:../receipts
 

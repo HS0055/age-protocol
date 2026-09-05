@@ -1,5 +1,5 @@
 {
-  "name": "agie-runtime",
+  "name": "age-protocol",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22.18" },
