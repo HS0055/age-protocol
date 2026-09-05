@@ -82,6 +82,22 @@ the interop vector: fixed keys, fixed events, and the exact bytes every value
 below must have. Ed25519 is deterministic, so a conforming implementation
 reproduces it byte for byte.
 
+### Domain separation
+
+Every signed AGE document names its own kind with exactly one `*_version`
+member, and that member is part of the bytes the signature covers. A receipt
+core carries `receipt_version`, a registry attestation carries
+`attestation_version`, and a daily root document carries `root_version`. The
+three member names are distinct and their values are distinct, so a signature
+made over one kind of document cannot be read as a signature over another.
+
+A verifier must reject a document whose expected version member is absent or
+holds a version it does not implement, and must not accept a document that
+carries a version member it did not ask for. The three member sets must never
+be merged into one structure, and no later version may reuse a `*_version`
+member name for a different kind of document. Domain separation in AGE rests
+on these member names alone; there is no separate type tag to fall back on.
+
 ### Envelope and body
 
 The node builds and signs an envelope. The cloud assigns three members and
