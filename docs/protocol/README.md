@@ -275,3 +275,20 @@ verifier does not know is always reported as skipped.
 Every one of these must answer for hostile input rather than throwing. A
 verifier handed `null`, a primitive, or a `signatures` array holding `null`
 returns a verdict, never an exception.
+
+### Check this specification against a second implementation
+
+`verify.py` beside this file is a complete AGE v0.1 verifier in about two
+hundred lines of Python: another language, another crypto library, its own
+canonicalizer, written from this document rather than from the reference
+code. It agrees with the reference on every value of the interop vector, and
+a test in `packages/receipts` re-checks that agreement.
+
+```
+python3 verify.py golden-v0.1.json
+```
+
+It is there to be read and doubted. A specification is interoperable when a
+second implementation agrees with the first, not when its author says so, and
+a receipt is only worth something if verifying it never requires trusting the
+party that issued it.
