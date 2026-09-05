@@ -229,13 +229,33 @@ def merkle_root(leaves):
     k = split_point(len(leaves))
     return node_hash(merkle_root(leaves[:k]), merkle_root(leaves[k:]))
 
+def json_int(value):
+    """A JSON integer, or None. Rejects bool, which Python counts as an int.
+
+    JSON has no boolean-as-number, but Python evaluates False == 0, so an
+    index of false would otherwise be read as index 0 and an inclusion proof
+    for position 0 would verify. Every integer read out of untrusted JSON goes
+    through here.
+    """
+    if isinstance(value, bool) or not isinstance(value, int): return None
+    return value
+
+HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
+COMMIT = re.compile(r"\A[0-9a-f]{40}\Z")
+
 def verify_inclusion(leaf: bytes, proof: dict, root_hex: str) -> bool:
-    """RFC 9162 section 2.1.3.2."""
-    fn, sn = proof["index"], proof["size"] - 1
-    if not (0 <= fn < proof["size"]): return False
+    """RFC 9162 section 2.1.3.2. Answers for any input rather than raising."""
+    if not isinstance(proof, dict) or not isinstance(root_hex, str): return False
+    fn, size = json_int(proof.get("index")), json_int(proof.get("size"))
+    if fn is None or size is None or size < 1: return False
+    path = proof.get("path")
+    if not isinstance(path, list): return False
+    sn = size - 1
+    if not (0 <= fn < size): return False
     r = leaf_hash(leaf)
-    for entry in proof["path"]:
+    for entry in path:
         if sn == 0: return False
+        if not isinstance(entry, str) or not HEX64.match(entry): return False
         p = bytes.fromhex(entry)
         if (fn & 1) == 1 or fn == sn:
             r = node_hash(p, r)
@@ -260,6 +280,42 @@ def embedded_key_problem(value):
     if value["kty"] != "OKP": return f'embedded agent key kty {value["kty"]!r} is not OKP'
     if value["crv"] != "Ed25519": return f'embedded agent key crv {value["crv"]!r} is not Ed25519'
     return None
+
+def root_verdict(receipt, root_doc, proof, registry_jwks):
+    """Whether this receipt is in this signed root, answering for any input.
+
+    Both halves are required: a tree nobody has checked the signature of
+    proves nothing, and a signature over a tree the receipt is not in proves
+    nothing either.
+    """
+    if not isinstance(root_doc, dict) or not isinstance(proof, dict):
+        return False, "root document or proof is not an object"
+    detail = f'{root_doc.get("date")} sequence {root_doc.get("sequence_start")} to {root_doc.get("sequence_end")}'
+    registry = root_doc.get("registry")
+    root = root_doc.get("root")
+    start, end = json_int(root_doc.get("sequence_start")), json_int(root_doc.get("sequence_end"))
+    if (root_doc.get("root_version") != "0.1" or not isinstance(registry, str)
+            or not registry.startswith("age:registry:") or not isinstance(root, str)
+            or not root.startswith("sha256:") or start is None or end is None
+            or start < 1 or end < start):
+        return False, detail
+
+    keys = {thumbprint(k): k for k in registry_jwks}
+    rkey = keys.get(registry.removeprefix("age:registry:"))
+    unsigned = {k: v for k, v in root_doc.items() if k != "signature"}
+    if rkey is None or not ed25519_verify(rkey, root_doc.get("signature"), canonical(unsigned)):
+        return False, detail
+
+    # The receipt has to be registered by the registry this document names,
+    # and the proof has to sit where that registration says it does.
+    entry = next((e for e in receipt.get("signatures", [])
+                  if isinstance(e, dict) and e.get("role") == "registry" and e.get("signer") == registry), None)
+    sequence = json_int(proof.get("sequence"))
+    if entry is None or sequence is None or json_int(entry.get("sequence")) != sequence:
+        return False, detail
+    if json_int(proof.get("size")) != end - start + 1: return False, detail
+    if json_int(proof.get("index")) != sequence - start: return False, detail
+    return verify_inclusion(canonical(receipt), proof, root.removeprefix("sha256:")), detail
 
 def verify(receipt: dict, registry_jwks: list, root_doc=None, proof=None):
     checks = []
@@ -349,27 +405,24 @@ def verify(receipt: dict, registry_jwks: list, root_doc=None, proof=None):
         rep(f"{safe or 'unknown'} signature", None, f"unknown role {role[:40]}, not checked")
 
     # 5. Commit binding
-    act = receipt.get("action", {})
+    act = receipt.get("action") if isinstance(receipt.get("action"), dict) else {}
     if act.get("type") != "git.commit":
         rep("Commit binding", None, f'action {act.get("type")} is not a commit')
     else:
-        c = act.get("commit", "")
-        listed = any(o.get("kind") == "commit" and o.get("ref") == c for o in receipt.get("outputs", []))
-        ok = len(c) == 40 and all(ch in "0123456789abcdef" for ch in c) and listed
-        rep("Commit binding", ok, f'{c[:7]} ({act.get("files_changed")} files)')
+        commit = act.get("commit")
+        if not isinstance(commit, str) or not COMMIT.match(commit):
+            rep("Commit binding", False, f"commit {commit!r} is not a 40 character hex id")
+        else:
+            outputs = receipt.get("outputs") if isinstance(receipt.get("outputs"), list) else []
+            listed = any(isinstance(o, dict) and o.get("kind") == "commit" and o.get("ref") == commit
+                         for o in outputs)
+            rep("Commit binding", listed,
+                f'{commit[:7]} ({act.get("files_changed")} files)' if listed
+                else f"{commit[:7]} is not listed in outputs")
 
     # 6. Root inclusion
-    if root_doc and proof:
-        keys = {thumbprint(k): k for k in registry_jwks}
-        rkey = keys.get(root_doc["registry"].removeprefix("age:registry:"))
-        unsigned = {k: v for k, v in root_doc.items() if k != "signature"}
-        sig_ok = rkey is not None and root_doc.get("root_version") == "0.1" and \
-                 ed25519_verify(rkey, root_doc["signature"], canonical(unsigned))
-        size = root_doc["sequence_end"] - root_doc["sequence_start"] + 1
-        inc = sig_ok and proof["size"] == size and \
-              proof["index"] == proof["sequence"] - root_doc["sequence_start"] and \
-              verify_inclusion(canonical(receipt), proof, root_doc["root"].removeprefix("sha256:"))
-        rep("Root inclusion", inc, f'{root_doc["date"]} sequence {root_doc["sequence_start"]} to {root_doc["sequence_end"]}')
+    if root_doc is not None and proof is not None:
+        rep("Root inclusion", *root_verdict(receipt, root_doc, proof, registry_jwks))
 
     return checks
 

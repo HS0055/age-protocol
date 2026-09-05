@@ -5,12 +5,14 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   verifyReceipt, canonicalBytes, sha256Digest, signBytes, bareJwk, agentIdOf,
+  verifyRoot, verifyRootInclusion, keyMapFromJwks,
   type PrivateJwk, type PublicJwk, type Receipt, type ReceiptCore,
 } from '../src/index.ts';
 
 interface GoldenVector {
   keys: { agent_private: PrivateJwk; agent_public: PublicJwk; registry_public: PublicJwk };
-  receipts: { core: ReceiptCore; receipt: Receipt }[];
+  receipts: { core: ReceiptCore; receipt: Receipt; proof: Record<string, unknown> }[];
+  root: { document: Record<string, unknown> };
 }
 
 // docs/protocol/verify.py is a second implementation of verification: another
@@ -44,6 +46,23 @@ function run(...args: string[]) {
 // any signature-array change legitimately puts a receipt outside the root.
 function runReceipt(receipt: unknown) {
   return spawnSync(PYTHON as string, [VERIFIER, VECTOR, JSON.stringify(receipt), '--no-root'], { encoding: 'utf8' });
+}
+
+// Asks verify.py for the root verdict alone, so it can be compared against
+// verifyRoot and verifyRootInclusion rather than against a whole run.
+function runRoot(receipt: unknown, doc: unknown, proof: unknown) {
+  const script = [
+    'import json, sys, importlib.util',
+    `spec = importlib.util.spec_from_file_location("v", ${JSON.stringify(VERIFIER)})`,
+    'm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)',
+    `g = json.load(open(${JSON.stringify(VECTOR)}))`,
+    'receipt, doc, proof = json.loads(sys.argv[1]), json.loads(sys.argv[2]), json.loads(sys.argv[3])',
+    'ok, _ = m.root_verdict(receipt, doc, proof, [g["keys"]["registry_public"]])',
+    'print("INCLUDED" if ok else "NOT")',
+  ].join('\n');
+  return spawnSync(PYTHON as string,
+    ['-c', script, JSON.stringify(receipt), JSON.stringify(doc), JSON.stringify(proof)],
+    { encoding: 'utf8' });
 }
 
 test('a second implementation verifies every receipt in the golden vector', when, () => {
@@ -306,4 +325,131 @@ test('the two implementations agree on absent policy, key surrogates, empty role
   (bigSequence.signatures[1] as { sequence: number }).sequence = 2 ** 53;
   assert.equal(verifyReceipt(bigSequence, keys).ok, false);
   assert.equal(runReceipt(bigSequence).status, 1, 'the two disagree on an unsafe sequence');
+});
+
+// The eight tests above are regression tests: each names a bug that once
+// existed and records why its rule is there, which is something a generator
+// cannot do. What they cannot do is find a rule nobody thought to write a
+// case for, and four review rounds found defects sitting next to cases the
+// enumerated suite already covered. So this one generates instead, from a
+// fixed seed so a failure is reproducible.
+test('a generated corpus finds no disagreement between the two implementations', when, () => {
+  const vector = JSON.parse(readFileSync(VECTOR, 'utf8')) as GoldenVector;
+  const keys = { registryKeys: [vector.keys.registry_public] };
+  const item = vector.receipts[0] as GoldenVector['receipts'][number];
+
+  // mulberry32: a small deterministic PRNG, so CI failures are reproducible.
+  let state = 0x9e3779b9;
+  const random = () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = <T,>(xs: T[]): T => xs[Math.floor(random() * xs.length)] as T;
+
+  // The values that historically broke one implementation and not the other:
+  // booleans where an integer is read, absent versus null, surrogates,
+  // numbers outside the safe range, and wrong-typed containers.
+  const HOSTILE: unknown[] = [
+    null, true, false, 0, -1, 1.5, 2 ** 53, 1e21, '', '   ', '\ud800', 'age:agent:',
+    [], {}, [null], { role: 7 }, 'sha256:' + 'z'.repeat(64), Number.MAX_SAFE_INTEGER,
+  ];
+
+  const paths = ['receipt_version', 'agent', 'timestamp', 'task', 'action', 'inputs',
+    'outputs', 'environment', 'policy', 'id'];
+
+  let compared = 0;
+  for (let i = 0; i < 120; i += 1) {
+    const core = JSON.parse(JSON.stringify(item.core)) as Record<string, unknown>;
+    const mutations = 1 + Math.floor(random() * 3);
+    for (let m = 0; m < mutations; m += 1) {
+      const key = pick(paths);
+      if (random() < 0.25) delete core[key];
+      else core[key] = pick(HOSTILE);
+    }
+
+    // Sign with the raw primitives so only shape and canonicalization decide
+    // the verdict; agentSign would reject most of these before signing.
+    let receipt: Receipt;
+    try {
+      const bytes = canonicalBytes(core);
+      receipt = {
+        ...core, id: sha256Digest(bytes),
+        signatures: [{
+          role: 'agent', signer: agentIdOf(bareJwk(vector.keys.agent_public)), alg: 'Ed25519',
+          key: bareJwk(vector.keys.agent_public), signature: signBytes(bytes, vector.keys.agent_private),
+        }],
+      } as unknown as Receipt;
+    } catch {
+      continue; // canonicalization refused it, which is a signer's job
+    }
+
+    // The reference must always answer, never raise.
+    let reference: boolean;
+    try {
+      reference = verifyReceipt(receipt, keys).ok;
+    } catch (error) {
+      assert.fail(`the reference raised instead of reporting: ${String(error)}\n${JSON.stringify(core).slice(0, 300)}`);
+    }
+    const result = runReceipt(receipt);
+    assert.doesNotMatch(result.stdout + result.stderr, /Traceback/,
+      `verify.py raised on: ${JSON.stringify(core).slice(0, 300)}`);
+    assert.equal(result.status === 0, reference,
+      `the two implementations disagree on: ${JSON.stringify(core).slice(0, 300)}`);
+    compared += 1;
+  }
+  assert.ok(compared > 100, `expected most cases to be comparable, got ${compared}`);
+});
+
+// The root and proof surface had no differential coverage at all for four
+// review rounds, which is why a boolean index verifying as index 0 survived
+// there. JSON has no boolean-as-number, but Python counts False as 0.
+test('the two implementations agree on hostile roots and proofs', when, () => {
+  const vector = JSON.parse(readFileSync(VECTOR, 'utf8')) as GoldenVector;
+  const registryKeys = keyMapFromJwks([vector.keys.registry_public]);
+  const item = vector.receipts[0] as GoldenVector['receipts'][number];
+  const doc = vector.root.document;
+  const proof = item.proof;
+
+  const both = (d: unknown, p: unknown, label: string) => {
+    let reference: boolean;
+    try {
+      reference = verifyRoot(d as never, registryKeys) && verifyRootInclusion(item.receipt, p as never, d as never);
+    } catch (error) {
+      assert.fail(`the reference raised on ${label}: ${String(error)}`);
+    }
+    const result = runRoot(item.receipt, d, p);
+    assert.doesNotMatch(result.stdout + result.stderr, /Traceback/, `verify.py raised on ${label}`);
+    assert.equal(result.stdout.trim() === 'INCLUDED', reference, `the two disagree on ${label}`);
+  };
+
+  both(doc, proof, 'the genuine root and proof');
+  assert.equal(runRoot(item.receipt, doc, proof).stdout.trim(), 'INCLUDED', 'the genuine pair must verify');
+
+  // A boolean where an integer is read. This is the direction that matters:
+  // the reference says not included, and verify.py once said included.
+  for (const field of ['index', 'size', 'sequence']) {
+    for (const value of [false, true]) {
+      both(doc, { ...proof, [field]: value }, `proof.${field} = ${value}`);
+    }
+  }
+  for (const field of ['sequence_start', 'sequence_end']) {
+    both({ ...doc, [field]: false }, proof, `root.${field} = false`);
+  }
+
+  const hostileDocs: unknown[] = [null, 42, 'x', [], {}, true,
+    { ...doc, registry: 7 }, { ...doc, registry: 'nope' }, { ...doc, sequence_end: '3' },
+    { ...doc, sequence_start: null }, { ...doc, root: 5 }, { ...doc, root: 'sha256:zz' },
+    { ...doc, root_version: null }, { ...doc, signature: null }, { ...doc, sequence_end: 1 }];
+  const hostileProofs: unknown[] = [null, 42, 'x', [], {},
+    { ...proof, path: 'abc' }, { ...proof, path: [1, 2] }, { ...proof, path: ['zz'] },
+    { ...proof, path: null }, { ...proof, index: -1 }, { ...proof, size: 0 },
+    { ...proof, sequence: null }, { ...proof, index: 1.5 }];
+
+  for (const d of hostileDocs) {
+    for (const p of hostileProofs) {
+      both(d, p, `${JSON.stringify(d).slice(0, 60)} with ${JSON.stringify(p).slice(0, 60)}`);
+    }
+  }
 });
