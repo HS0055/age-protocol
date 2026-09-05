@@ -56,7 +56,10 @@ export function inclusionProof(leaves: Uint8Array[], index: number): InclusionPr
   return { index, size: leaves.length, path };
 }
 
-const HEX_32_BYTES = /^[0-9a-fA-F]{64}$/;
+// Lowercase only. Accepting both cases would mean two spellings of one proof,
+// and an implementation that emits uppercase would interoperate here and
+// nowhere else.
+const HEX_32_BYTES = /^[0-9a-f]{64}$/;
 
 // RFC 9162 section 2.1.3.2. A malformed proof is a false, never an exception.
 export function verifyInclusion(leafData: Uint8Array, proof: InclusionProof, rootHex: string): boolean {

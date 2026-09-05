@@ -139,6 +139,13 @@ output. A quantity that is not a whole number belongs in a string, or in a
 smaller unit: milliseconds, cents, basis points. A signer must refuse a core
 that breaks this rule, and a verifier must fail such a receipt.
 
+**The rule is about the value, not how the literal was written.** RFC 8785
+handles numbers as IEEE 754 doubles, so `3`, `3.0`, `3e0`, and `300e-2` all
+denote the same value and all canonicalize to `3`. A verifier must accept any
+of them and reject `3.5`, because what it is judging is the number, not its
+spelling. A language that parses `3.0` into a float type must therefore ask
+whether the value is integral, not whether the type is an integer.
+
 The same restriction applies to every other signed number in AGE: a registry
 attestation's `sequence`, and a root document's `sequence_start` and
 `sequence_end`. All three are integers, and a sequence is at least 1.
@@ -220,7 +227,11 @@ array unreported.
 
 A `registry` entry's `sequence` must be an integer from 1 to
 9007199254740991. It is a signed number, so the same restriction that governs
-the core applies to it.
+the core applies to it. The same bounds apply to a root document's
+`sequence_start` and `sequence_end`, and `sequence_end` is never below
+`sequence_start`. A verifier must check the lower bound as well as the type:
+a root claiming to start at 0 shifts every index, and the arithmetic still
+lines up.
 
 Two consequences of the counting rules are worth stating plainly, because both
 are correct and neither is obvious. A byte-identical duplicate of a valid
@@ -284,7 +295,9 @@ An inclusion proof is RFC 9162:
 ```
 
 `path` entries are bare lowercase hex, 64 characters each, with **no**
-`sha256:` prefix; the prefix appears only on the document's `root`. `index` is
+`sha256:` prefix; the prefix appears only on the document's `root`. Uppercase
+is not accepted: two spellings of one proof means two implementations that
+interoperate here and nowhere else. `index` is
 `sequence` minus the document's `sequence_start`, and `size` is
 `sequence_end` minus `sequence_start` plus one. A verifier must check both
 rather than trusting them, or a proof from one position could be replayed at

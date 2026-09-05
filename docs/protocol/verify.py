@@ -165,6 +165,10 @@ def number_problem(value, path=""):
     if isinstance(value, int):
         return None if abs(value) <= MAX_SAFE else f"{path or 'the core'} {value} is outside the safe integer range"
     if isinstance(value, float):
+        # RFC 8785 handles numbers as IEEE 754 doubles, so 3.0 and 3 denote the
+        # same value and canonicalize to the same bytes. The rule is about the
+        # value, not how the literal was spelled.
+        if value.is_integer() and abs(value) <= MAX_SAFE: return None
         return f"{path or 'the core'} {value!r} must be an integer of magnitude at most {MAX_SAFE}"
     if isinstance(value, list):
         for i, item in enumerate(value):

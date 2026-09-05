@@ -164,3 +164,44 @@ test('a receipt is not included in a root that names a registry it was not regis
   const foreign = { ...doc, registry: SECOND_ID } as RootDocument;
   assert.equal(verifyRootInclusion(six, proof, foreign), false);
 });
+
+// These mutate the document and then RE-SIGN it. The tests above mutate after
+// signing, so verifyRoot rejects on the signature alone and the inclusion
+// arithmetic beneath it is never reached. A release review found two real
+// defects hiding in exactly that gap.
+test('a re-signed root claiming to start below sequence 1 is rejected', () => {
+  const all = [five, six, seven];
+  const genuine = buildRoot(all, '2026-09-05', registry.privateJwk);
+  const proof = proofFor(all, six, REGISTRY_ID);
+  assert.equal(verifyRoot(genuine, [registry.publicJwk]) && verifyRootInclusion(six, proof, genuine), true);
+
+  const resign = (doc: RootDocument): RootDocument => {
+    const { signature: _drop, ...unsigned } = doc;
+    return { ...unsigned, signature: signBytes(canonicalBytes(unsigned), registry.privateJwk) } as RootDocument;
+  };
+
+  for (const start of [0, -1, -5]) {
+    const shifted = resign({ ...genuine, sequence_start: start, sequence_end: start + 2 });
+    // The document's own signature is valid, so only the bound can reject it.
+    assert.equal(verifyRoot(shifted, [registry.publicJwk]), true, `the shifted root is properly signed at ${start}`);
+    const claim = { ...proof, index: proof.sequence - start };
+    assert.equal(verifyRootInclusion(six, claim, shifted), false, `sequence_start ${start} must be rejected`);
+  }
+
+  // sequence_end below sequence_start is not a range.
+  const inverted = resign({ ...genuine, sequence_start: 7, sequence_end: 5 });
+  assert.equal(verifyRootInclusion(seven, proofFor(all, seven, REGISTRY_ID), inverted), false);
+});
+
+test('an inclusion proof path is bare lowercase hex, and uppercase is not the same proof', () => {
+  const all = [five, six, seven];
+  const doc = buildRoot(all, '2026-09-05', registry.privateJwk);
+  const proof = proofFor(all, six, REGISTRY_ID);
+  assert.ok(proof.path.length > 0, 'a three-leaf tree gives a non-empty path');
+  assert.equal(verifyRootInclusion(six, proof, doc), true);
+
+  const upper = { ...proof, path: proof.path.map((entry) => entry.toUpperCase()) };
+  assert.equal(verifyRootInclusion(six, upper, doc), false, 'uppercase hex is not accepted');
+  const mixed = { ...proof, path: proof.path.map((entry) => `${entry.slice(0, 1).toUpperCase()}${entry.slice(1)}`) };
+  assert.equal(verifyRootInclusion(six, mixed, doc), false, 'mixed case is not accepted either');
+});

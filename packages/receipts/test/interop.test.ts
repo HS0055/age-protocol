@@ -45,7 +45,14 @@ function run(...args: string[]) {
 // does compares different questions. A Merkle leaf is the whole receipt, so
 // any signature-array change legitimately puts a receipt outside the root.
 function runReceipt(receipt: unknown) {
-  return spawnSync(PYTHON as string, [VERIFIER, VECTOR, JSON.stringify(receipt), '--no-root'], { encoding: 'utf8' });
+  return runReceiptText(JSON.stringify(receipt));
+}
+
+// Takes the receipt as raw JSON text. Round-tripping through JSON.stringify
+// erases the difference between 3 and 3.0 before Python ever sees it, which
+// is precisely the case being compared.
+function runReceiptText(text: string) {
+  return spawnSync(PYTHON as string, [VERIFIER, VECTOR, text, '--no-root'], { encoding: 'utf8' });
 }
 
 // Asks verify.py for the root verdict alone, so it can be compared against
@@ -451,5 +458,35 @@ test('the two implementations agree on hostile roots and proofs', when, () => {
     for (const p of hostileProofs) {
       both(d, p, `${JSON.stringify(d).slice(0, 60)} with ${JSON.stringify(p).slice(0, 60)}`);
     }
+  }
+});
+
+// JavaScript erases the difference between 3 and 3.0 before the value is ever
+// text, so no object-level mutation can produce this case. The literal has to
+// be spliced into the serialized JSON after signing, which is how a release
+// review found it: one implementation asked whether the value was an integer
+// and the other asked whether the type was.
+test('the two implementations agree on integers written as floats', when, () => {
+  const vector = JSON.parse(readFileSync(VECTOR, 'utf8')) as GoldenVector;
+  const keys = { registryKeys: [vector.keys.registry_public] };
+  const receipt = vector.receipts[0]?.receipt as Receipt;
+  const text = JSON.stringify(receipt);
+  assert.match(text, /"files_changed":3\b/, 'the seed carries the integer this test rewrites');
+
+  // Every spelling of the same value canonicalizes to 3, so the id and both
+  // signatures still cover identical bytes and only the number rule decides.
+  for (const literal of ['3.0', '3e0', '300e-2', '3.00000']) {
+    const spliced = text.replace('"files_changed":3', `"files_changed":${literal}`);
+    const parsed = JSON.parse(spliced) as Receipt;
+    assert.equal(verifyReceipt(parsed, keys).ok, true, `${literal} denotes 3 and must verify`);
+    assert.equal(runReceiptText(spliced).status, 0, `the two disagree on the literal ${literal}`);
+  }
+
+  // A value that is not a whole number is still refused, from either spelling.
+  for (const literal of ['3.5', '3.0000001']) {
+    const spliced = text.replace('"files_changed":3', `"files_changed":${literal}`);
+    const parsed = JSON.parse(spliced) as Receipt;
+    assert.equal(verifyReceipt(parsed, keys).ok, false, `${literal} is not an integer`);
+    assert.equal(runReceiptText(spliced).status, 1, `the two disagree on the literal ${literal}`);
   }
 });

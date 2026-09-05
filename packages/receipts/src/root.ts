@@ -115,11 +115,15 @@ export function verifyRootInclusion(receipt: Receipt, proof: RootProof, doc: Roo
   if (document.root_version !== ROOT_VERSION) return false;
   if (typeof document.root !== 'string' || !document.root.startsWith(DIGEST_PREFIX)) return false;
   if (typeof document.registry !== 'string') return false;
-  if (!Number.isInteger(document.sequence_start) || !Number.isInteger(document.sequence_end)) return false;
+  // A sequence starts at 1. Without the lower bound a root claiming to start
+  // at 0 or below shifts every index, and the arithmetic below still lines up.
+  if (!Number.isSafeInteger(document.sequence_start) || !Number.isSafeInteger(document.sequence_end)) return false;
   const start = document.sequence_start as number;
+  const end = document.sequence_end as number;
+  if (start < 1 || end < start) return false;
   const entry = registrySignatureFor(receipt, document.registry);
   if (!entry || !Number.isInteger(claim.sequence) || entry.sequence !== claim.sequence) return false;
-  if (claim.size !== (document.sequence_end as number) - start + 1) return false;
+  if (claim.size !== end - start + 1) return false;
   if (claim.index !== (claim.sequence as number) - start) return false;
   try {
     return verifyInclusion(canonicalBytes(receipt), proof, document.root.slice(DIGEST_PREFIX.length));

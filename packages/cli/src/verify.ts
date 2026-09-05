@@ -69,7 +69,7 @@ function isUrl(value: string): boolean {
   return value.startsWith('http://') || value.startsWith('https://');
 }
 
-const HEX_32_BYTES = /^[0-9a-fA-F]{64}$/;
+const HEX_32_BYTES = /^[0-9a-f]{64}$/;
 const COMMIT_HASH = /^[0-9a-f]{40}$/;
 
 // Input shapes are checked before any check runs, so a malformed file is an

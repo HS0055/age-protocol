@@ -452,3 +452,19 @@ test('a receipt nested deeper than the limit gets a verdict rather than a stack 
   for (let i = 0; i < 30; i += 1) shallow = { n: shallow };
   assert.equal(coreNumberProblem(shallow), undefined);
 });
+
+test('an integer written as a float is the same number, and is accepted', () => {
+  // RFC 8785 handles numbers as IEEE 754 doubles, so 3.0 and 3 denote one
+  // value and canonicalize to the same bytes. The rule is about the value,
+  // not the spelling, which is what makes a language that parses 3.0 into a
+  // float agree with one that does not.
+  assert.equal(coreNumberProblem({ n: 3.0 }), undefined);
+  assert.equal(coreNumberProblem({ n: 1e2 }), undefined);
+  assert.equal(coreNumberProblem({ n: -0.0 }), undefined);
+  assert.equal(canonicalize({ n: 3.0 }), '{"n":3}');
+  assert.equal(canonicalize({ n: 300e-2 }), '{"n":3}');
+
+  assert.match(coreNumberProblem({ n: 3.5 }) ?? '', /must be an integer/);
+  const signed = agentSign(core({ action: { type: 'a', ratio: 4.0 } }), agent.privateJwk);
+  assert.equal(verifyReceipt(signed).ok, true);
+});
