@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  agentSign, registrySign, buildRoot, proofFor, generateKeyPair, agentIdOf, bareJwk,
+  agentSign, registrySign, buildRoot, proofFor, generateKeyPair, agentIdOf, registryIdOf, bareJwk,
   RECEIPT_VERSION, type Receipt, type ReceiptCore,
 } from '@ageprotocol/receipts';
 import { runVerify } from '../src/verify.ts';
 
 const agent = generateKeyPair();
 const registry = generateKeyPair();
+const forger = generateKeyPair();
 const COMMIT = '8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918';
 const JWKS_URL = 'https://registry.test/.well-known/age-jwks.json';
 
@@ -174,4 +175,19 @@ test('control characters from the input never reach the terminal', async () => {
   const { io, out } = harness({ 'noisy.json': noisy });
   await runVerify(['noisy.json', '--offline'], io);
   assert.equal(out.some((line) => line.includes('\u001b')), false);
+});
+
+test('a forged second registry entry is labelled by position and fails with exit 1', async () => {
+  const forged = {
+    ...receipt,
+    signatures: [...receipt.signatures, {
+      role: 'registry', signer: registryIdOf(forger.publicJwk), alg: 'Ed25519', sequence: 9999,
+      registered_at: '2026-09-05T03:20:04Z', signature: 'A'.repeat(86),
+    }],
+  };
+  const { io, out } = harness({ 'forged.json': forged });
+  assert.equal(await runVerify(['forged.json', '--jwks', 'jwks.json'], io), 1);
+  assert.equal(out[3], `\u2713 Registry signature 1   ${REGISTRY_SIGNER}  sequence #184`);
+  assert.match(out[4] ?? '', /^\u2717 Registry signature 2   registry key age:registry:/);
+  assert.equal(out.at(-1), 'FAILED');
 });

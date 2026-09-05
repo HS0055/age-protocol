@@ -224,9 +224,15 @@ const LABELS: Record<string, string> = {
 
 const MARKERS: Record<CheckStatus, string> = { pass: '✓', fail: '✗', skip: '-' };
 
+// A receipt countersigned by more than one registry reports one numbered
+// check per registry, in the order the entries appear in the receipt.
+const NUMBERED_REGISTRY = /^registry_signature_(\d{1,3})$/;
+
 function labelOf(check: Check): string {
   const known = LABELS[check.name];
   if (known !== undefined) return known;
+  const numbered = NUMBERED_REGISTRY.exec(check.name);
+  if (numbered) return `Registry signature ${numbered[1]}`;
   const role = check.name.replace(/_signature$/, '');
   return `${role.charAt(0).toUpperCase()}${role.slice(1)} signature`;
 }

@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import {
   agentSign, registrySign, verifyReceipt, receiptIdOf, agentIdOf, registryIdOf, thumbprintOfId, coreOf,
   agentSignatureOf, registrySignatureOf, attestationOf, canonicalize, canonicalBytes, generateKeyPair, bareJwk,
-  keyMapFromJwks, sha256Digest, AGENT_ID_PREFIX, REGISTRY_ID_PREFIX, RECEIPT_VERSION, ATTESTATION_VERSION,
-  type Receipt, type ReceiptCore,
+  keyMapFromJwks, sha256Digest, signBytes, registrySigningInput, toPublicJwk,
+  AGENT_ID_PREFIX, REGISTRY_ID_PREFIX, RECEIPT_VERSION, ATTESTATION_VERSION,
+  type PrivateJwk, type Receipt, type ReceiptCore, type RegistrySignature,
 } from '../src/index.ts';
 
 const agent = generateKeyPair();
 const registry = generateKeyPair();
+const second = generateKeyPair();
 const stranger = generateKeyPair();
 const AGENT_ID = agentIdOf(agent.publicJwk);
 const ASSIGNED = { sequence: 184, registered_at: '2026-09-05T03:20:04Z', jwks: 'https://registry.test/.well-known/age-jwks.json' };
@@ -34,6 +36,17 @@ function registered(overrides: Partial<ReceiptCore> = {}): Receipt {
 
 function statuses(receipt: Receipt, keys = [registry.publicJwk]) {
   return Object.fromEntries(verifyReceipt(receipt, { registryKeys: keys }).checks.map((c) => [c.name, c.status]));
+}
+
+// A second registry countersigns an already registered receipt. registrySign
+// issues the first registration only, so the entry is built from the same
+// exported primitives a second registry would use.
+function countersign(receipt: Receipt, sequence: number, registryPrivate: PrivateJwk): Receipt {
+  const signer = registryIdOf(bareJwk(toPublicJwk(registryPrivate)));
+  const registered_at = '2026-09-05T05:00:00Z';
+  const signature = signBytes(registrySigningInput(receipt, { sequence, registered_at, signer }), registryPrivate);
+  const entry: RegistrySignature = { role: 'registry', signer, alg: 'Ed25519', sequence, registered_at, signature };
+  return { ...receipt, signatures: [...receipt.signatures, entry] };
 }
 
 test('agentSign derives the id from the canonical core and embeds the bare public key', () => {
@@ -165,4 +178,66 @@ test('the canonical core is what the agent signs', () => {
   const signed = agentSign(core(), agent.privateJwk);
   assert.equal(canonicalize(coreOf(signed)), canonicalize(core()));
   assert.equal(Buffer.from(canonicalBytes(coreOf(signed))).toString('utf8').includes('"signatures"'), false);
+});
+
+test('a forged second registry entry is reported and fails the receipt', () => {
+  const receipt = registered();
+  const forged: Receipt = {
+    ...receipt,
+    signatures: [...receipt.signatures, {
+      role: 'registry', signer: registryIdOf(stranger.publicJwk), alg: 'Ed25519', sequence: 9999,
+      registered_at: '2026-09-05T03:20:04Z', signature: 'A'.repeat(86),
+    }],
+  };
+  const result = verifyReceipt(forged, { registryKeys: [registry.publicJwk] });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.checks.map((c) => [c.name, c.status]), [
+    ['integrity', 'pass'], ['agent_signature', 'pass'], ['agent_identity', 'pass'],
+    ['registry_signature_1', 'pass'], ['registry_signature_2', 'fail'],
+  ]);
+  assert.match(result.checks[4]?.detail ?? '', /not available/);
+  const withKey = verifyReceipt(forged, { registryKeys: [registry.publicJwk, stranger.publicJwk] });
+  assert.equal(withKey.ok, false);
+  assert.equal(withKey.checks[4]?.detail, 'registry signature does not verify');
+});
+
+test('prepending a junk agent entry does not pass because a later valid entry exists', () => {
+  const receipt = registered();
+  const junk = { role: 'agent', signer: agentIdOf(stranger.publicJwk), alg: 'Ed25519', key: bareJwk(stranger.publicJwk), signature: 'A'.repeat(86) };
+  const forged: Receipt = { ...receipt, signatures: [junk, ...receipt.signatures] };
+  const result = verifyReceipt(forged, { registryKeys: [registry.publicJwk] });
+  assert.equal(result.ok, false);
+  assert.equal(statuses(forged).agent_signature, 'fail');
+  assert.equal(statuses(forged).agent_identity, 'fail');
+  assert.match(result.checks[1]?.detail ?? '', /2 agent signatures/);
+});
+
+test('two entries with role agent, both individually valid, is a failure', () => {
+  const signed = agentSign(core(), agent.privateJwk);
+  const twice: Receipt = { ...signed, signatures: [...signed.signatures, ...signed.signatures] };
+  const s = statuses(twice);
+  assert.equal(s.agent_signature, 'fail');
+  assert.equal(s.agent_identity, 'fail');
+  assert.equal(verifyReceipt(twice).ok, false);
+});
+
+test('two genuine registry entries both verify and are both reported', () => {
+  const receipt = countersign(registered(), 12, second.privateJwk);
+  const result = verifyReceipt(receipt, { registryKeys: [registry.publicJwk, second.publicJwk] });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.checks.map((c) => [c.name, c.status]), [
+    ['integrity', 'pass'], ['agent_signature', 'pass'], ['agent_identity', 'pass'],
+    ['registry_signature_1', 'pass'], ['registry_signature_2', 'pass'],
+  ]);
+  assert.match(result.checks[3]?.detail ?? '', /sequence #184/);
+  assert.match(result.checks[4]?.detail ?? '', /sequence #12/);
+});
+
+test('reordering a valid receipt signature array does not change the verdict', () => {
+  const receipt = registered();
+  const reordered: Receipt = { ...receipt, signatures: [...receipt.signatures].reverse() };
+  const before = verifyReceipt(receipt, { registryKeys: [registry.publicJwk] });
+  const after = verifyReceipt(reordered, { registryKeys: [registry.publicJwk] });
+  assert.equal(after.ok, true);
+  assert.deepEqual(after.checks, before.checks);
 });

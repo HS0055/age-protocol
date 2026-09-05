@@ -132,14 +132,41 @@ export function registrySigningInput(receipt: Receipt, entry: RegistryEntryField
   return canonicalBytes(attestationOf(receipt, entry));
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// Nothing here trusts the array to hold objects, or to hold one entry per
+// role. Callers that want a verdict on every entry use verifyReceipt.
+function signatureEntries(receipt: Receipt): unknown[] {
+  const value = receipt as unknown;
+  if (!isObject(value) || !Array.isArray(value.signatures)) return [];
+  return value.signatures as unknown[];
+}
+
+function entriesWithRole(receipt: Receipt, role: string): Record<string, unknown>[] {
+  return signatureEntries(receipt).filter((entry): entry is Record<string, unknown> => isObject(entry) && entry.role === role);
+}
+
+export function agentSignaturesOf(receipt: Receipt): AgentSignature[] {
+  return entriesWithRole(receipt, 'agent') as unknown as AgentSignature[];
+}
+
+export function registrySignaturesOf(receipt: Receipt): RegistrySignature[] {
+  return entriesWithRole(receipt, 'registry') as unknown as RegistrySignature[];
+}
+
 export function agentSignatureOf(receipt: Receipt): AgentSignature | undefined {
-  if (!Array.isArray(receipt.signatures)) return undefined;
-  return receipt.signatures.find((entry): entry is AgentSignature => entry.role === 'agent');
+  return agentSignaturesOf(receipt)[0];
 }
 
 export function registrySignatureOf(receipt: Receipt): RegistrySignature | undefined {
-  if (!Array.isArray(receipt.signatures)) return undefined;
-  return receipt.signatures.find((entry): entry is RegistrySignature => entry.role === 'registry');
+  return registrySignaturesOf(receipt)[0];
+}
+
+// A root belongs to one registry, so a lookup names the registry it means.
+export function registrySignatureFor(receipt: Receipt, registryId: string): RegistrySignature | undefined {
+  return registrySignaturesOf(receipt).find((entry) => entry.signer === registryId);
 }
 
 function assertCore(core: ReceiptCore, caller: string): void {
@@ -212,8 +239,10 @@ export interface VerifyReceiptOptions {
 }
 
 // Every check is always reported, so a reader sees the whole picture even
-// when the first one fails. A receipt is ok when nothing failed; a skipped
-// registry check means an unregistered receipt, which is still a valid one.
+// when the first one fails. Every entry in the signature array is judged or
+// reported by name, so no entry can hide behind another with the same role.
+// A receipt is ok when nothing failed; a skipped registry check means an
+// unregistered receipt, which is still a valid one.
 export function verifyReceipt(receipt: Receipt, options: VerifyReceiptOptions = {}): VerifyReceiptResult {
   const checks: Check[] = [];
   const report = (name: string, status: CheckStatus, detail: string) => {
@@ -228,10 +257,12 @@ export function verifyReceipt(receipt: Receipt, options: VerifyReceiptOptions = 
     report('integrity', 'pass', receipt.id);
   }
 
-  const agent = agentSignatureOf(receipt);
-  if (!agent) {
-    report('agent_signature', 'fail', 'no agent signature');
-    report('agent_identity', 'fail', 'no agent signature');
+  const agents = agentSignaturesOf(receipt);
+  const agent = agents[0];
+  if (agents.length !== 1 || !agent) {
+    const detail = agents.length === 0 ? 'no agent signature' : `${agents.length} agent signatures, exactly one is required`;
+    report('agent_signature', 'fail', detail);
+    report('agent_identity', 'fail', detail);
   } else if (!isPublicJwk(agent.key)) {
     report('agent_signature', 'fail', 'agent signature carries no public key');
     report('agent_identity', 'fail', 'agent signature carries no public key');
@@ -247,31 +278,36 @@ export function verifyReceipt(receipt: Receipt, options: VerifyReceiptOptions = 
     );
   }
 
-  const registry = registrySignatureOf(receipt);
-  if (!registry) {
+  // Zero registry entries is an unregistered receipt. One keeps the name the
+  // CLI already labels. More than one is legitimate once a second registry
+  // countersigns, and every one of them has to verify on its own.
+  const registries = registrySignaturesOf(receipt);
+  if (registries.length === 0) {
     report('registry_signature', 'skip', 'absent, unregistered receipt');
   } else {
     const keys = options.registryKeys instanceof Map ? options.registryKeys : keyMapFromJwks(options.registryKeys ?? []);
-    const jkt = thumbprintOfId(registry.signer, REGISTRY_ID_PREFIX);
-    const key = jkt === undefined ? undefined : keys.get(jkt);
-    if (!key) {
-      report('registry_signature', 'fail', `registry key ${String(registry.signer)} not available`);
-    } else if (!Number.isInteger(registry.sequence) || typeof registry.registered_at !== 'string' || typeof registry.signature !== 'string') {
-      report('registry_signature', 'fail', 'registry signature entry is malformed');
-    } else if (verifyBytes(registrySigningInput(receipt, registry), registry.signature, key)) {
-      report('registry_signature', 'pass', `${registry.signer}  sequence #${registry.sequence}`);
-    } else {
-      report('registry_signature', 'fail', 'registry signature does not verify');
-    }
+    registries.forEach((entry, position) => {
+      const name = registries.length === 1 ? 'registry_signature' : `registry_signature_${position + 1}`;
+      const [status, detail] = registryVerdict(receipt, entry, keys);
+      report(name, status, detail);
+    });
   }
 
-  if (Array.isArray(receipt.signatures)) {
-    for (const entry of receipt.signatures) {
-      if (entry.role !== 'agent' && entry.role !== 'registry') {
-        report(`${String(entry.role)}_signature`, 'skip', 'unknown role, not checked');
-      }
-    }
+  for (const entry of signatureEntries(receipt)) {
+    if (isObject(entry) && (entry.role === 'agent' || entry.role === 'registry')) continue;
+    report(`${String((entry as Record<string, unknown>).role)}_signature`, 'skip', 'unknown role, not checked');
   }
 
   return { ok: checks.every((check) => check.status !== 'fail'), checks };
+}
+
+function registryVerdict(receipt: Receipt, entry: RegistrySignature, keys: Map<string, PublicJwk>): [CheckStatus, string] {
+  const jkt = thumbprintOfId(entry.signer, REGISTRY_ID_PREFIX);
+  const key = jkt === undefined ? undefined : keys.get(jkt);
+  if (!key) return ['fail', `registry key ${String(entry.signer)} not available`];
+  if (!Number.isInteger(entry.sequence) || typeof entry.registered_at !== 'string' || typeof entry.signature !== 'string') {
+    return ['fail', 'registry signature entry is malformed'];
+  }
+  if (!verifyBytes(registrySigningInput(receipt, entry), entry.signature, key)) return ['fail', 'registry signature does not verify'];
+  return ['pass', `${entry.signer}  sequence #${entry.sequence}`];
 }
