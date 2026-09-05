@@ -1,94 +1,51 @@
-# AGE Protocol v0.1, and the AGIE Cloud to Runtime draft
+# AGE Protocol v0.1
 
-This document has two halves. **Receipts**, from that heading onward, is AGE
-Protocol v0.1: the receipt format, identity, canonicalization, signatures,
-daily roots, and verification. It is implemented, frozen by the interop vector
-beside this file, and normative.
+AGE is the trust and verification layer for work performed by AI agents.
 
-Everything before it is the draft contract between AGIE Cloud and an AGIE
-Runtime node. That half is **parked**, not implemented, and will change. It is
-published here, in the open runtime repository, so anyone can build a runtime
-or a client. Breaking changes are expected until v1 is tagged.
+This document specifies what an AGE receipt is, how an agent signs it, how a
+registry countersigns it, how daily roots are built, and how anyone verifies
+all of it without trusting AGE. It is normative. The reference implementation
+is `@ageprotocol/receipts`, the reference verifier is `agectl verify`, a second
+independent implementation is `verify.py` beside this file, and the interop
+vector every implementation must reproduce is `golden-v0.1.json`.
 
 ## Principles
 
-- The runtime only dials out. It never listens on a public port.
-- Every runtime request is signed with the node key (RFC 9449 DPoP proof
-  with an EdDSA JWK). The cloud stores public keys only.
-- Source code never crosses the wire. Logs, metadata, and hashes do.
-- Every meaningful event becomes a receipt signed by the agent and
-  countersigned by a registry (see Receipts below).
+- **The agent is the primary signer.** A receipt says "this work record was
+  signed by this agent identity", not "this computer produced it".
+- **Identities are derived from keys, never issued.** `age:agent:<thumbprint>`
+  is computed on the agent's own machine, with no network and no account. A
+  registry recognises an identity from a sequence number onward; it cannot
+  mint one, and it cannot take one away.
+- **Everything a verifier needs is public**: this specification, the canonical
+  form, the signature format, the registry's keys, and the verifier itself. A
+  receipt still verifies if the registry disappears.
+- **Signature roles are open.** Version 0.1 defines `agent` and `registry`. A
+  verifier reports roles it does not know and never fails on them, so
+  `runtime`, `hardware`, and `organization` can be added without breaking
+  verifiers written against this version.
+- **Roots are published, not immutable.** A daily root is a signed statement
+  about a range of sequences. Witnessing and anchoring are possible later and
+  are not part of v0.1. Nothing here requires a blockchain.
 
-## Identities
+## Primitives
 
-| Entity | Key | Id |
-|---|---|---|
-| Node | Ed25519, generated on the machine | RFC 7638 thumbprint (`jkt`) |
-| Agent | Ed25519, generated on the machine (Alien Agent ID format) | `jkt` |
-| Cloud | Ed25519, published in JWKS | `jkt` |
+- Canonical JSON: RFC 8785 (JCS).
+- Digests: SHA-256, written as `sha256:` followed by 64 lowercase hex characters.
+- Keys: Ed25519 as JWK, `{ "kty": "OKP", "crv": "Ed25519", "x": "..." }`.
+- Thumbprints: RFC 7638 over `{ "crv", "kty", "x" }`, base64url.
+- Signatures: Ed25519 over canonical bytes, base64url without padding, 86 characters.
+- Trees: RFC 6962 (RFC 9162), leaf prefix `0x00`, node prefix `0x01`.
 
-Cloud discovery: `GET https://<cloud>/.well-known/agie.json` returns
+## Identifiers
 
-```json
-{
-  "version": 0,
-  "jwks_uri": "https://<cloud>/.well-known/agie-jwks.json",
-  "roots_uri": "https://<cloud>/.well-known/agie-roots/",
-  "roots_mirror": "https://github.com/<org>/<repo>",
-  "api": "https://<cloud>/api/runtime"
-}
-```
+| Kind | Form |
+|---|---|
+| Agent | `age:agent:` and the RFC 7638 thumbprint of the agent's public key |
+| Registry | `age:registry:` and the thumbprint of the registry's public key |
+| Receipt | `sha256:` and the hex SHA-256 of the canonical receipt core |
 
-The JWKS document is `{ "keys": [PublicJwk] }`. Each key carries a `kid` equal
-to its thumbprint, but a verifier must not trust that label: it identifies a
-key by recomputing the RFC 7638 thumbprint of the key material itself, so a
-JWKS with wrong or missing `kid` values changes nothing.
-
-## Link flow
-
-1. `agie runtime link` generates the node key and prints a one-time code.
-2. The user opens `https://<cloud>/link/<code>` while signed in and chooses an org.
-3. The runtime polls `POST /api/runtime/link/exchange` with the code and its
-   public key until the cloud returns a node credential bound to the key.
-4. From then on every request carries `Authorization: DPoP <credential>` and
-   a `DPoP` proof JWT signed by the node key.
-
-## Heartbeat
-
-`POST /api/runtime/heartbeat` every 30 seconds with
-`{ "runtime_version", "capabilities": { "cpu_cores", "ram_gb", "gpu", "disk_gb", "os", "arch", "agent_clis": [], "max_sessions" } }`.
-
-## Jobs
-
-- `GET /api/runtime/jobs?wait=25` long-polls for up to 25 seconds and returns
-  at most one job: `{ "id", "run_id", "adapter", "repo": { "url", "ref" }, "prompt_bundle_url", "policy": { ... } }`.
-- `POST /api/runtime/jobs/:id/claim` claims it atomically; a second claim returns 409.
-- `POST /api/runtime/jobs/:id/logs` appends `{ "stream": "stdout" | "stderr", "seq", "chunk" }`.
-- `POST /api/runtime/jobs/:id/events` posts an agent-signed receipt for
-  `session.started`, `tool.gated`, `git.commit`, `session.finished`, in the
-  AGE Protocol v0.1 form specified under Receipts below. The registry
-  countersigns it with a sequence and returns the full receipt. The agent
-  signature covers the core alone, so it still verifies afterwards.
-- `POST /api/runtime/jobs/:id/result` posts
-  `{ "exit_code", "session_id", "usage", "changed_files": [{ "path_hash", "sha256" }], "work_products": [] }`.
-
-## Gates
-
-When the runtime's PreToolUse hook intercepts a gated action it posts
-`POST /api/runtime/gates` with `{ "run_id", "class", "summary" }` and receives
-`{ "decision": "approved" | "rejected" | "pending", "approval_id" }`. While
-pending, the runtime polls `GET /api/runtime/gates/:approval_id` every 5 seconds.
-
-## Receipts
-
-Receipts follow **AGE Protocol v0.1**, specified below. The implementation in
-`packages/receipts` is normative, and `golden-v0.1.json` next to this file is
-the interop vector: fixed keys, fixed content, and the exact bytes every value
-below must have. Ed25519 is deterministic, so a conforming implementation
-reproduces it byte for byte. The vector carries three registered receipts
-forming a three-leaf Merkle tree, so no inclusion proof has an empty path.
-
-### Domain separation
+## Domain separation
 
 Every signed AGE document names its own kind with exactly one `*_version`
 member, and that member is part of the bytes the signature covers. A receipt
@@ -104,7 +61,7 @@ be merged into one structure, and no later version may reuse a `*_version`
 member name for a different kind of document. Domain separation in AGE rests
 on these member names alone; there is no separate type tag to fall back on.
 
-### The receipt
+## The receipt
 
 A receipt has three parts. The **core** is what the agent asserts. The **id**
 is derived from it. The **signatures** are what other parties say about it.
@@ -135,7 +92,7 @@ must be a string; each artifact must carry a string `kind` and `digest`.
 `id` is `sha256:` followed by the lowercase hex SHA-256 of the canonical bytes
 of the core, that is, of the receipt with `id` and `signatures` removed.
 
-### Canonicalization
+## Canonicalization
 
 Canonical JSON is RFC 8785 (JCS): object members sorted by key, no
 insignificant whitespace, and ES6 number and string serialization. Two rules
@@ -161,7 +118,7 @@ that breaks this rule, and a verifier must fail such a receipt.
 Signatures are Ed25519, encoded base64url without padding, over the canonical
 bytes of the document being signed.
 
-### Identity
+## Identity
 
 An agent identity is `age:agent:` followed by the RFC 7638 JWK thumbprint of
 its Ed25519 public key. A registry identity is `age:registry:` followed by the
@@ -172,7 +129,7 @@ registry can only recognise a key it is shown, never grant one.
 Public keys are looked up by computed thumbprint, never by a `kid` label, so a
 mislabelled key cannot bind an identity to a key that does not hash to it.
 
-### Signatures
+## Signatures
 
 `signatures` is an array of entries, each naming a `role`. Order carries no
 meaning, and every entry is judged or reported by name, so no entry can hide
@@ -207,7 +164,7 @@ does not know are reported and skipped, never judged, so `runtime`,
 `hardware`, and `organization` signers can be added later without breaking
 verifiers written against v0.1.
 
-### Registry attestation
+## Registry attestation
 
 A registry does not re-sign content. It signs a short statement about a
 receipt id:
@@ -227,7 +184,7 @@ can still carry a valid registry signature: what breaks is the link between
 the id and the content, which the integrity and agent checks catch. Keeping
 the claims separate is deliberate.
 
-### Daily roots
+## Daily roots
 
 A registry publishes a signed document per UTC day over a contiguous run of
 its own sequences:
@@ -254,7 +211,7 @@ required.
 These roots are published, not immutable. Witnessing and anchoring are
 possible later and are not part of v0.1.
 
-### Verification
+## Verification
 
 A verifier reports every check and reaches a verdict only from them. A
 receipt is verified when no check failed; a skipped check is not a failure.
@@ -276,7 +233,7 @@ Every one of these must answer for hostile input rather than throwing. A
 verifier handed `null`, a primitive, or a `signatures` array holding `null`
 returns a verdict, never an exception.
 
-### Check this specification against a second implementation
+## Check this specification against a second implementation
 
 `verify.py` beside this file is a complete AGE v0.1 verifier in about two
 hundred lines of Python: another language, another crypto library, its own
@@ -292,3 +249,27 @@ It is there to be read and doubted. A specification is interoperable when a
 second implementation agrees with the first, not when its author says so, and
 a receipt is only worth something if verifying it never requires trusting the
 party that issued it.
+
+## Registry API
+
+A registry is a convenience, not an authority: the receipt and root formats
+above are the contract, and the transport is free to differ. The reference
+registry is open source and ships in a later release with `POST /agents`,
+`GET /agents/:id`, `POST /receipts`, `GET /receipts/:id`, `GET /receipts`,
+`GET /roots/:date`, `GET /.well-known/age.json`, and
+`GET /.well-known/age-jwks.json`.
+
+## Interop vector
+
+`golden-v0.1.json` fixes an agent key and a registry key, both test keys that
+protect nothing, and three receipts registered at sequences 184, 185, and 186.
+For each it carries the core, the exact canonical bytes the agent signed, the
+signed and registered forms, the registry attestation and its signing bytes,
+and an inclusion proof. It also carries the signed daily root over all three.
+
+Three leaves means every proof has a non-empty path and one carries an
+internal node hash, so an implementation that omits the RFC 6962 domain
+prefixes cannot reproduce it. Receipt 185 pins UTF-16 key ordering with a
+supplementary-plane key. Receipt 186 pins the number rules. Ed25519 is
+deterministic, so a conforming implementation reproduces every id and
+signature byte for byte.

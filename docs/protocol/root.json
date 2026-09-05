@@ -1,0 +1,9 @@
+{
+  "root_version": "0.1",
+  "registry": "age:registry:kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM",
+  "date": "2026-09-05",
+  "sequence_start": 184,
+  "sequence_end": 186,
+  "root": "sha256:d8ca87992942b61165280d6444549f517e1607f961de049f26cdee300cee1447",
+  "signature": "y81xLGpRDLo7ncg38NVXUIUggov6ZPwAHLpiVj7Ept8HyUS0OlZy_-d025b2FUwcMadOJOoyy4cvdjmR_TS5Dw"
+}

@@ -1,0 +1,65 @@
+{
+  "receipt_version": "0.1",
+  "agent": "age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw",
+  "timestamp": "2026-09-05T03:20:00Z",
+  "task": {
+    "id": "tsk_91",
+    "description": "Fix authentication bug"
+  },
+  "action": {
+    "type": "git.commit",
+    "repository": "https://github.com/ageprotocol/demo",
+    "commit": "8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918",
+    "files_changed": 3,
+    "insertions": 214,
+    "deletions": 38,
+    "tests": "passed"
+  },
+  "inputs": [
+    {
+      "kind": "prompt",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "outputs": [
+    {
+      "kind": "commit",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918"
+    }
+  ],
+  "environment": {
+    "runtime": "claude-code/2.1.0",
+    "workspace": "github.com/ageprotocol/demo",
+    "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "policy": {
+    "id": "default",
+    "version": "1",
+    "hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "decision": "allowed"
+  },
+  "id": "sha256:9701e8874d3057f99ef7ecb5b3d0962682961227375e330c0cbf9ab606af7afb",
+  "signatures": [
+    {
+      "role": "agent",
+      "signer": "age:agent:Pjm7k4j6W3WHAu3006hy0sSTKX-LIm1YqDuWrh-u8rw",
+      "alg": "Ed25519",
+      "key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "IJjrqzBsYmLNgOh76Cph8OYAeIkpxHXR0k28xf8SjXI"
+      },
+      "signature": "6Rh-IW9vgOGt0AYAMEA6Ei0n8sg8W-iZdbTVRKvl437Z4EHNKwv9olZJexNbeMfyCp6oxlA_HZp-6vLadohwBA"
+    },
+    {
+      "role": "registry",
+      "signer": "age:registry:kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM",
+      "alg": "Ed25519",
+      "sequence": 184,
+      "registered_at": "2026-09-05T03:20:04Z",
+      "jwks": "https://registry.ageprotocol.dev/.well-known/age-jwks.json",
+      "signature": "qFI1q2od7ANpq3lXaCU5HFAgY_TThj76YnVHpFX2UNiDtTEP6LunrjA4kKZomc_XW6i-EGBeG0cp58rTx6E9BQ"
+    }
+  ]
+}
