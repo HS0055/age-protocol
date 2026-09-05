@@ -294,6 +294,11 @@ export interface VerifyReceiptOptions {
 }
 
 const NOT_CHECKED = 'not checked, the receipt is malformed';
+
+// A check name is rendered by the CLI, so only a plain token out of the
+// receipt is ever allowed to shape one. Everything else is named
+// unknown_signature and says what it saw in the detail instead.
+const ROLE_TOKEN = /^[A-Za-z0-9_-]{1,32}$/;
 const SIGNING_ALGORITHM = 'Ed25519';
 const EMBEDDED_KEY_MEMBERS = ['crv', 'kty', 'x'];
 
@@ -388,6 +393,8 @@ export function verifyReceipt(receipt: Receipt, options: VerifyReceiptOptions = 
       report('unknown_signature', 'fail', `signature entry ${i} is ${safeText(entry)}, not an object`);
     } else if (typeof entry.role !== 'string') {
       report('unknown_signature', 'fail', `signature entry ${i} has a role that is ${safeText(entry.role)}, not a string`);
+    } else if (!ROLE_TOKEN.test(entry.role)) {
+      report('unknown_signature', 'skip', `unknown role ${safeText(entry.role)}, not checked`);
     } else {
       report(`${entry.role}_signature`, 'skip', 'unknown role, not checked');
     }

@@ -340,3 +340,29 @@ test('the embedded agent key carries exactly kty, crv, and x, and nothing else',
   assert.equal(statuses(swap({ crv: 'Ed25519', kty: 'OKP' })).agent_signature, 'fail');
   assert.equal(statuses(swap(bareJwk(agent.publicJwk))).agent_signature, 'pass');
 });
+
+test('a hostile role is reported in the detail and never becomes part of a check name', () => {
+  const receipt = registered();
+  const escape = String.fromCharCode(27, 91, 50, 75);
+  const entry = (role: unknown) => ({ ...receipt, signatures: [...receipt.signatures, { role, signer: 'age:runtime:x', alg: 'Ed25519', signature: 'A'.repeat(86) }] }) as unknown as Receipt;
+  const printable = (text: string) => [...text].every((ch) => (ch.codePointAt(0) ?? 0) >= 0x20 && ch.codePointAt(0) !== 0x7f);
+
+  const noisy = verifyReceipt(entry(`runtime${escape}`), { registryKeys: [registry.publicJwk] }).checks.at(-1);
+  assert.equal(noisy?.name, 'unknown_signature');
+  assert.equal(noisy?.status, 'skip');
+  assert.match(noisy?.detail ?? '', /runtime/);
+  assert.ok(printable(noisy?.detail ?? ''), 'the detail carries no control characters');
+
+  const long = verifyReceipt(entry('r'.repeat(200)), { registryKeys: [registry.publicJwk] }).checks.at(-1);
+  assert.equal(long?.name, 'unknown_signature');
+  assert.ok((long?.detail.length ?? 0) < 120, 'the detail is truncated');
+
+  for (const role of [null, 42, { role: 'agent' }, ['agent']]) {
+    const check = verifyReceipt(entry(role), { registryKeys: [registry.publicJwk] }).checks.at(-1);
+    assert.equal(check?.name, 'unknown_signature', String(role));
+    assert.equal(check?.status, 'fail', String(role));
+  }
+
+  const known = verifyReceipt(entry('runtime'), { registryKeys: [registry.publicJwk] }).checks.at(-1);
+  assert.deepEqual(known, { name: 'runtime_signature', status: 'skip', detail: 'unknown role, not checked' });
+});
