@@ -115,12 +115,14 @@ A trust layer nobody can check is just a database with good manners. So:
   everything needed to write your own verifier.
 - **There is already a second implementation.** `docs/protocol/verify.py` is a
   complete verifier in about three hundred lines of Python, written from the
-  specification and sharing no code with this one. CI runs four differential
-  tests against it on every push: the whole vector, two tampered receipts, a
-  padded signature, and seventeen malformed receipts that are each correctly
-  signed and wrong in exactly one way. Agreeing on valid receipts is easy;
-  those tests exist because agreeing on the invalid ones is the hard part, and
-  is where the first version of that verifier was wrong.
+  specification and sharing no code with this one. CI runs seven differential
+  tests against it on every push, comparing verdicts on the whole vector,
+  tampered receipts, a padded signature, seventeen malformed receipts,
+  eight forged signature entries, seven inputs that are not receipts, and the
+  three cases where the two canonicalizers could quietly disagree. Agreeing on
+  valid receipts is easy. Those tests exist because agreeing on the invalid
+  ones is the hard part, and it is where earlier versions of that verifier
+  were wrong three separate times.
 - **The interop vector is committed.** `docs/protocol/golden-v0.1.json` fixes
   the keys and the content, so any implementation can prove it reproduces the
   exact bytes.

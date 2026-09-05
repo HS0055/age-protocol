@@ -189,3 +189,58 @@ test('neither implementation raises on input that is not a receipt', when, () =>
   }
 });
 
+// Three cases where a fix on one side alone silently changed the rules. Each
+// was caught by comparing verdicts rather than by either suite on its own.
+test('the two implementations agree on surrogates, nesting depth, and non-string roles', when, () => {
+  const vector = JSON.parse(readFileSync(VECTOR, 'utf8')) as GoldenVector;
+  const keys = { registryKeys: [vector.keys.registry_public] };
+  const item = vector.receipts[0] as GoldenVector['receipts'][number];
+
+  const sign = (core: Record<string, unknown>): Receipt => {
+    const bytes = canonicalBytes(core);
+    return {
+      ...core,
+      id: sha256Digest(bytes),
+      signatures: [{
+        role: 'agent', signer: agentIdOf(bareJwk(vector.keys.agent_public)), alg: 'Ed25519',
+        key: bareJwk(vector.keys.agent_public), signature: signBytes(bytes, vector.keys.agent_private),
+      }],
+    } as unknown as Receipt;
+  };
+
+  // An unpaired surrogate is escaped as \udXXX by a well-formed
+  // JSON.stringify. A canonicalizer that emits it raw produces different
+  // bytes, so this receipt verifies in one implementation and not the other
+  // with nothing visibly wrong.
+  const surrogate = JSON.parse(JSON.stringify(item.core)) as Record<string, unknown>;
+  (surrogate.task as Record<string, unknown>).description = 'lone \ud800 surrogate';
+  const signedSurrogate = sign(surrogate);
+  assert.equal(verifyReceipt(signedSurrogate, keys).ok, true, 'a surrogate is legal content');
+  assert.equal(run(JSON.stringify(signedSurrogate)).status, 0, 'the two canonicalizers disagree on a surrogate');
+
+  // Just inside and just outside the depth limit.
+  const nested = (levels: number) => {
+    const core = JSON.parse(JSON.stringify(item.core)) as Record<string, unknown>;
+    let leaf: Record<string, unknown> = { deepest: 1 };
+    for (let i = 0; i < levels; i += 1) leaf = { n: leaf };
+    core.environment = leaf;
+    return core;
+  };
+  const shallow = sign(nested(50));
+  assert.equal(verifyReceipt(shallow, keys).ok, true, '50 levels is well inside the limit');
+  assert.equal(run(JSON.stringify(shallow)).status, 0, 'disagreement at 50 levels');
+
+  // Past the limit neither may sign, so the receipt is built by hand and both
+  // must reject it rather than recursing.
+  const tooDeep = { ...nested(200), id: `sha256:${'0'.repeat(64)}`, signatures: [] } as unknown as Receipt;
+  assert.equal(verifyReceipt(tooDeep, keys).ok, false);
+  const deepResult = run(JSON.stringify(tooDeep));
+  assert.equal(deepResult.status, 1, 'the two disagree past the depth limit');
+  assert.doesNotMatch(deepResult.stdout + deepResult.stderr, /RecursionError|Traceback/);
+
+  // A role that is not a string is not a signature, and is not skippable.
+  const badRole = JSON.parse(JSON.stringify(item.receipt)) as Receipt;
+  badRole.signatures.push({ role: 7, signer: 'x', signature: 'y' } as never);
+  assert.equal(verifyReceipt(badRole, keys).ok, false);
+  assert.equal(run(JSON.stringify(badRole)).status, 1, 'the two disagree on a non-string role');
+});

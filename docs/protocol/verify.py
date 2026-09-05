@@ -61,34 +61,54 @@ def es6_number(value) -> str:
     mantissa = digits if k == 1 else digits[0] + "." + digits[1:]
     return f"{mantissa}e{'+' if exponent >= 0 else '-'}{abs(exponent)}"
 
-def json_string(text: str) -> str:
-    """JSON string form: the two-character escapes, \\u00xx below 0x20, else literal."""
-    return json.dumps(text, ensure_ascii=False)
+SURROGATE = re.compile(r"[\ud800-\udfff]")
 
-def serialize(value) -> str:
+def json_string(text: str) -> str:
+    """JSON string form: two-character escapes, \\u00xx below 0x20, else literal.
+
+    RFC 8785 defers to ECMAScript for strings, and a well-formed
+    JSON.stringify escapes an unpaired surrogate as \\udXXX rather than
+    emitting it. Python holds code points, so every surrogate in a str is by
+    definition unpaired; encoding them raw would produce different canonical
+    bytes, a different receipt id, and a different signature input than the
+    reference. That is worse than the crash it replaced, because a crash is
+    visible and a wrong id is not.
+    """
+    out = json.dumps(text, ensure_ascii=False)
+    return SURROGATE.sub(lambda m: "\\u%04x" % ord(m.group()), out)
+
+# Nesting deeper than this is rejected rather than recursed into: a verifier
+# is handed JSON by strangers, and unbounded recursion on attacker-chosen
+# nesting is a stack overflow waiting to happen. Nothing honest comes close.
+MAX_DEPTH = 64
+
+class TooDeep(ValueError):
+    pass
+
+def serialize(value, depth=0) -> str:
+    if depth > MAX_DEPTH: raise TooDeep(f"nesting deeper than {MAX_DEPTH} levels")
     if value is None: return "null"
     if value is True: return "true"
     if value is False: return "false"
     if isinstance(value, str): return json_string(value)
     if isinstance(value, (int, float)): return es6_number(value)
-    if isinstance(value, (list, tuple)): return "[" + ",".join(serialize(v) for v in value) + "]"
+    if isinstance(value, (list, tuple)): return "[" + ",".join(serialize(v, depth + 1) for v in value) + "]"
     if isinstance(value, dict):
         # RFC 8785 orders members by UTF-16 code unit, not by code point, so a
         # supplementary-plane key sorts before U+FFFF: its first code unit is a
         # surrogate at U+D800. Sorting the Python strings themselves would put
         # them the other way round and reproduce neither an id nor a signature.
         members = sorted(value.items(), key=lambda item: item[0].encode("utf-16-be"))
-        return "{" + ",".join(json_string(k) + ":" + serialize(v) for k, v in members) + "}"
+        return "{" + ",".join(json_string(k) + ":" + serialize(v, depth + 1) for k, v in members) + "}"
     raise TypeError(f"cannot canonicalize {type(value).__name__}")
 
 def canonical(value) -> bytes:
     """RFC 8785 JCS: UTF-16 key order, ES6 numbers, no whitespace.
 
-    A lone surrogate is valid JSON input and cannot be encoded as UTF-8.
-    Rather than raising, encode it the way a JS engine does, so a receipt
-    carrying one still gets a verdict.
+    Unpaired surrogates are escaped by json_string, so nothing here can fail
+    to encode.
     """
-    return serialize(value).encode("utf-8", "surrogatepass")
+    return serialize(value).encode("utf-8")
 
 def thumbprint(jwk: dict) -> str:
     """RFC 7638 over the required members only."""
@@ -120,6 +140,19 @@ def artifacts_problem(value, member: str):
     for i, item in enumerate(value):
         if not isinstance(item, dict) or not isinstance(item.get("kind"), str) or not isinstance(item.get("digest"), str):
             return f"{member} entry {i} must be an object with a string kind and digest"
+    return None
+
+def depth_problem(value, path="", depth=0):
+    if depth > MAX_DEPTH:
+        return f"{path or 'the core'} is nested deeper than {MAX_DEPTH} levels"
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            problem = depth_problem(item, f"{path}[{i}]", depth + 1)
+            if problem: return problem
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            problem = depth_problem(item, f"{path}.{key}" if path else key, depth + 1)
+            if problem: return problem
     return None
 
 def number_problem(value, path=""):
@@ -165,7 +198,8 @@ def shape_problem(value):
     if not isinstance(value.get("id"), str) or not RECEIPT_ID.match(value["id"]):
         return "id must be a sha256: digest"
     if not isinstance(value.get("signatures"), list): return "signatures must be an array"
-    return number_problem(core_of(value))
+    core = core_of(value)
+    return depth_problem(core) or number_problem(core)
 
 def core_of(receipt: dict) -> dict:
     return {k: v for k, v in receipt.items() if k not in ("id", "signatures")}
@@ -295,7 +329,12 @@ def verify(receipt: dict, registry_jwks: list, root_doc=None, proof=None):
             rep(f"signature entry {i}", False, f"entry {i} is not an object"); continue
         role = entry.get("role")
         if role in ("agent", "registry"): continue
-        safe = "unknown" if not isinstance(role, str) else "".join(c for c in role if c.isalnum() or c in "_-")[:32]
+        if not isinstance(role, str) or not role:
+            # Not a signature at all. Skipping it would let arbitrary content
+            # ride inside the array unreported.
+            rep(f"signature entry {i}", False, f"role {role!r} is not a string")
+            continue
+        safe = "".join(c for c in role if c.isalnum() or c in "_-")[:32]
         rep(f"{safe or 'unknown'} signature", None, "unknown role, not checked")
 
     # 5. Commit binding

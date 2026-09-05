@@ -143,6 +143,21 @@ The same restriction applies to every other signed number in AGE: a registry
 attestation's `sequence`, and a root document's `sequence_start` and
 `sequence_end`. All three are integers, and a sequence is at least 1.
 
+**An unpaired surrogate is escaped, not emitted.** RFC 8785 defers to
+ECMAScript for strings, and a well-formed `JSON.stringify` writes a lone
+surrogate as `\udXXX` with lowercase hex. A language that holds code points
+rather than UTF-16 units will encode it raw unless told otherwise, which
+yields different canonical bytes, a different receipt id, and a different
+signature input. This is the quietest way for two implementations to disagree,
+because nothing crashes.
+
+**Nesting is limited to 64 levels.** A signer must refuse to sign a core
+nested deeper, and a verifier must fail such a receipt rather than recursing
+into it. A verifier is handed JSON by strangers, and unbounded recursion on
+attacker-chosen nesting is a stack overflow: the verifier's caller asked a
+question and would get an exception instead of a verdict. Nothing an agent
+legitimately records comes near this depth.
+
 Signatures are Ed25519 over the canonical bytes of the document being signed,
 encoded base64url without padding. An Ed25519 signature is 64 bytes, so the
 encoding is **exactly 86 characters** from the alphabet `A-Za-z0-9_-`. A
@@ -304,13 +319,20 @@ hundred lines of Python: another language, another crypto library, its own
 canonicalizer, written from this document rather than from the reference
 code.
 
-`packages/receipts/test/interop.test.ts` runs four differential tests against
-it: the whole vector, tampered receipts, a padded signature, and seventeen
-malformed receipts that are each correctly signed and wrong in exactly one
-way. That last one exists because the first version of this verifier accepted
-a receipt with no `timestamp` that the reference rejected. Two verifiers that
-disagree about which receipts are valid are worse than one, so the rules above
-are written to be enforced, not merely read.
+`packages/receipts/test/interop.test.ts` runs seven differential tests against
+it, comparing verdicts on the whole vector, tampered receipts, a padded
+signature, seventeen malformed receipts, eight forged signature entries, seven
+inputs that are not receipts, and the surrogate, depth, and non-string-role
+cases.
+
+Those tests exist because this verifier disagreed with the reference three
+separate times: it accepted a receipt with no `timestamp`, it took the first
+entry of each role and so accepted a forged second registry entry, and it
+encoded an unpaired surrogate raw and so computed a different receipt id. Only
+the last is invisible without a differential test, which is the argument for
+having one. Two verifiers that disagree about which receipts are valid are
+worse than one, so the rules above are written to be enforced, not merely
+read.
 
 ```
 python3 verify.py golden-v0.1.json
