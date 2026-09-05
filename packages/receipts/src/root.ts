@@ -1,7 +1,7 @@
 import { canonicalBytes } from './canonical.ts';
 import { bareJwk, keyMapFromJwks, toPublicJwk, type PrivateJwk, type PublicJwk } from './keys.ts';
 import { inclusionProof, merkleRoot, verifyInclusion, type InclusionProof } from './merkle.ts';
-import { DIGEST_PREFIX, REGISTRY_ID_PREFIX, registryIdOf, registrySignatureOf, thumbprintOfId, type Receipt } from './receipt.ts';
+import { DIGEST_PREFIX, REGISTRY_ID_PREFIX, registryIdOf, registrySignatureFor, registrySignatureOf, thumbprintOfId, type Receipt } from './receipt.ts';
 import { signBytes, verifyBytes } from './signature.ts';
 
 export const ROOT_VERSION = '0.1';
@@ -65,20 +65,43 @@ export function proofFor(receipts: Receipt[], receipt: Receipt): RootProof {
   return { sequence: sequenceOf(receipt), ...inclusionProof(leaves, index) };
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// Like the merkle layer below it, this layer answers false for anything it
+// cannot make sense of. A verifier handed a hostile file reports a verdict,
+// never an exception.
 export function verifyRoot(doc: RootDocument, keys: PublicJwk[] | Map<string, PublicJwk>): boolean {
-  if (doc.root_version !== ROOT_VERSION) return false;
-  const map = keys instanceof Map ? keys : keyMapFromJwks(keys);
-  const jkt = thumbprintOfId(doc.registry, REGISTRY_ID_PREFIX);
+  const value = doc as unknown;
+  if (!isObject(value)) return false;
+  if (value.root_version !== ROOT_VERSION || typeof value.signature !== 'string') return false;
+  const map = keys instanceof Map ? keys : keyMapFromJwks(keys as PublicJwk[]);
+  const jkt = typeof value.registry === 'string' ? thumbprintOfId(value.registry, REGISTRY_ID_PREFIX) : undefined;
   const key = jkt === undefined ? undefined : map.get(jkt);
-  if (!key || typeof doc.signature !== 'string') return false;
-  return verifyBytes(rootSigningInput(doc), doc.signature, key);
+  if (!key) return false;
+  try {
+    return verifyBytes(rootSigningInput(doc), value.signature, key);
+  } catch {
+    return false;
+  }
 }
 
 export function verifyRootInclusion(receipt: Receipt, proof: RootProof, doc: RootDocument): boolean {
-  if (typeof doc.root !== 'string' || !doc.root.startsWith(DIGEST_PREFIX)) return false;
-  const entry = registrySignatureOf(receipt);
-  if (!entry || entry.sequence !== proof.sequence) return false;
-  const size = doc.sequence_end - doc.sequence_start + 1;
-  if (proof.size !== size || proof.index !== proof.sequence - doc.sequence_start) return false;
-  return verifyInclusion(canonicalBytes(receipt), proof, doc.root.slice(DIGEST_PREFIX.length));
+  const document = doc as unknown;
+  const claim = proof as unknown;
+  if (!isObject(document) || !isObject(claim) || !isObject(receipt as unknown)) return false;
+  if (typeof document.root !== 'string' || !document.root.startsWith(DIGEST_PREFIX)) return false;
+  if (typeof document.registry !== 'string') return false;
+  if (!Number.isInteger(document.sequence_start) || !Number.isInteger(document.sequence_end)) return false;
+  const start = document.sequence_start as number;
+  const entry = registrySignatureFor(receipt, document.registry);
+  if (!entry || !Number.isInteger(claim.sequence) || entry.sequence !== claim.sequence) return false;
+  if (claim.size !== (document.sequence_end as number) - start + 1) return false;
+  if (claim.index !== (claim.sequence as number) - start) return false;
+  try {
+    return verifyInclusion(canonicalBytes(receipt), proof, document.root.slice(DIGEST_PREFIX.length));
+  } catch {
+    return false;
+  }
 }

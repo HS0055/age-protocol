@@ -25,6 +25,7 @@ export {
   registryIdOf,
   thumbprintOfId,
   coreOf,
+  receiptShapeProblem,
   receiptIdOf,
   agentSigningInput,
   attestationOf,

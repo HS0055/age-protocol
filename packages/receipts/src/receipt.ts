@@ -136,6 +136,22 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/g;
+const DETAIL_LIMIT = 72;
+
+// Anything quoted back from the receipt is input the verifier does not
+// control. It is stripped of the characters that could rewrite a terminal and
+// truncated before it reaches a detail, and it never becomes a check name.
+function safeText(value: unknown): string {
+  const raw = typeof value === 'string' ? value
+    : value === null ? 'null'
+    : typeof value === 'object' ? (Array.isArray(value) ? 'an array' : 'an object')
+    : typeof value === 'symbol' ? 'a symbol'
+    : String(value);
+  const stripped = raw.replace(CONTROL_CHARACTERS, '');
+  return stripped.length > DETAIL_LIMIT ? `${stripped.slice(0, DETAIL_LIMIT)}...` : stripped;
+}
+
 // Nothing here trusts the array to hold objects, or to hold one entry per
 // role. Callers that want a verdict on every entry use verifyReceipt.
 function signatureEntries(receipt: Receipt): unknown[] {
@@ -167,6 +183,45 @@ export function registrySignatureOf(receipt: Receipt): RegistrySignature | undef
 // A root belongs to one registry, so a lookup names the registry it means.
 export function registrySignatureFor(receipt: Receipt, registryId: string): RegistrySignature | undefined {
   return registrySignaturesOf(receipt).find((entry) => entry.signer === registryId);
+}
+
+const RECEIPT_ID = /^sha256:[0-9a-f]{64}$/;
+
+function artifactsProblem(value: unknown, member: string): string | undefined {
+  if (!Array.isArray(value)) return `${member} must be an array`;
+  for (let i = 0; i < value.length; i += 1) {
+    const item: unknown = value[i];
+    if (!isObject(item) || typeof item.kind !== 'string' || typeof item.digest !== 'string') {
+      return `${member} entry ${i} must be an object with a string kind and digest`;
+    }
+  }
+  return undefined;
+}
+
+// What a third-party verifier that validates the schema would insist on. ok
+// must never mean less than this, or a receipt this verifier calls verified
+// is one another verifier rejects, which breaks interoperability in the
+// direction that matters most.
+export function receiptShapeProblem(value: unknown): string | undefined {
+  if (!isObject(value)) return 'receipt must be an object';
+  if (value.receipt_version !== RECEIPT_VERSION) {
+    return `receipt_version ${safeText(value.receipt_version)} is not ${RECEIPT_VERSION}`;
+  }
+  if (typeof value.agent !== 'string' || thumbprintOfId(value.agent, AGENT_ID_PREFIX) === undefined) {
+    return `agent must be an ${AGENT_ID_PREFIX} id`;
+  }
+  if (typeof value.timestamp !== 'string') return 'timestamp must be a string';
+  if (!isObject(value.task)) return 'task must be an object';
+  if (!isObject(value.action) || typeof value.action.type !== 'string') return 'action must be an object with a string type';
+  const inputs = artifactsProblem(value.inputs, 'inputs');
+  if (inputs !== undefined) return inputs;
+  const outputs = artifactsProblem(value.outputs, 'outputs');
+  if (outputs !== undefined) return outputs;
+  if (!isObject(value.environment)) return 'environment must be an object';
+  if (value.policy !== null && !isObject(value.policy)) return 'policy must be an object or null';
+  if (typeof value.id !== 'string' || !RECEIPT_ID.test(value.id)) return 'id must be a sha256: digest';
+  if (!Array.isArray(value.signatures)) return 'signatures must be an array';
+  return undefined;
 }
 
 function assertCore(core: ReceiptCore, caller: string): void {
@@ -238,6 +293,8 @@ export interface VerifyReceiptOptions {
   registryKeys?: PublicJwk[] | Map<string, PublicJwk>;
 }
 
+const NOT_CHECKED = 'not checked, the receipt is malformed';
+
 // Every check is always reported, so a reader sees the whole picture even
 // when the first one fails. Every entry in the signature array is judged or
 // reported by name, so no entry can hide behind another with the same role.
@@ -249,13 +306,26 @@ export function verifyReceipt(receipt: Receipt, options: VerifyReceiptOptions = 
     checks.push({ name, status, detail });
   };
 
-  if (receipt.receipt_version !== RECEIPT_VERSION) {
-    report('integrity', 'fail', `receipt_version ${String(receipt.receipt_version)} is not ${RECEIPT_VERSION}`);
-  } else if (typeof receipt.id !== 'string' || receipt.id !== receiptIdOf(receipt)) {
-    report('integrity', 'fail', 'mismatch');
-  } else {
-    report('integrity', 'pass', receipt.id);
+  const problem = receiptShapeProblem(receipt);
+  if (problem !== undefined) {
+    report('integrity', 'fail', problem);
+    report('agent_signature', 'fail', NOT_CHECKED);
+    report('agent_identity', 'fail', NOT_CHECKED);
+    return { ok: false, checks };
   }
+
+  let signingInput: Uint8Array;
+  try {
+    signingInput = agentSigningInput(receipt);
+  } catch (error) {
+    report('integrity', 'fail', `the receipt cannot be canonicalized: ${safeText(error instanceof Error ? error.message : error)}`);
+    report('agent_signature', 'fail', NOT_CHECKED);
+    report('agent_identity', 'fail', NOT_CHECKED);
+    return { ok: false, checks };
+  }
+
+  if (receipt.id === sha256Digest(signingInput)) report('integrity', 'pass', receipt.id);
+  else report('integrity', 'fail', 'mismatch');
 
   const agents = agentSignaturesOf(receipt);
   const agent = agents[0];
@@ -267,7 +337,7 @@ export function verifyReceipt(receipt: Receipt, options: VerifyReceiptOptions = 
     report('agent_signature', 'fail', 'agent signature carries no public key');
     report('agent_identity', 'fail', 'agent signature carries no public key');
   } else {
-    const signatureOk = typeof agent.signature === 'string' && verifyBytes(agentSigningInput(receipt), agent.signature, agent.key);
+    const signatureOk = typeof agent.signature === 'string' && verifyBytes(signingInput, agent.signature, agent.key);
     report('agent_signature', signatureOk ? 'pass' : 'fail', signatureOk ? agent.signer : 'agent signature does not verify');
     const derived = agentIdOf(agent.key);
     const identityOk = derived === agent.signer && derived === receipt.agent;
@@ -293,9 +363,17 @@ export function verifyReceipt(receipt: Receipt, options: VerifyReceiptOptions = 
     });
   }
 
-  for (const entry of signatureEntries(receipt)) {
+  const entries = signatureEntries(receipt);
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry: unknown = entries[i];
     if (isObject(entry) && (entry.role === 'agent' || entry.role === 'registry')) continue;
-    report(`${String((entry as Record<string, unknown>).role)}_signature`, 'skip', 'unknown role, not checked');
+    if (!isObject(entry)) {
+      report('unknown_signature', 'fail', `signature entry ${i} is ${safeText(entry)}, not an object`);
+    } else if (typeof entry.role !== 'string') {
+      report('unknown_signature', 'fail', `signature entry ${i} has a role that is ${safeText(entry.role)}, not a string`);
+    } else {
+      report(`${entry.role}_signature`, 'skip', 'unknown role, not checked');
+    }
   }
 
   return { ok: checks.every((check) => check.status !== 'fail'), checks };

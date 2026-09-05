@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   agentSign, registrySign, verifyReceipt, receiptIdOf, agentIdOf, registryIdOf, thumbprintOfId, coreOf,
   agentSignatureOf, registrySignatureOf, attestationOf, canonicalize, canonicalBytes, generateKeyPair, bareJwk,
-  keyMapFromJwks, sha256Digest, signBytes, registrySigningInput, toPublicJwk,
+  keyMapFromJwks, sha256Digest, signBytes, registrySigningInput, toPublicJwk, receiptShapeProblem,
   AGENT_ID_PREFIX, REGISTRY_ID_PREFIX, RECEIPT_VERSION, ATTESTATION_VERSION,
   type PrivateJwk, type Receipt, type ReceiptCore, type RegistrySignature,
 } from '../src/index.ts';
@@ -36,6 +36,21 @@ function registered(overrides: Partial<ReceiptCore> = {}): Receipt {
 
 function statuses(receipt: Receipt, keys = [registry.publicJwk]) {
   return Object.fromEntries(verifyReceipt(receipt, { registryKeys: keys }).checks.map((c) => [c.name, c.status]));
+}
+
+// Signs an arbitrary object as if it were a receipt core, with the same
+// exported primitives an implementer would use. Everything about the result
+// is consistent; only the schema is wrong.
+function forge(fields: Record<string, unknown>): Receipt {
+  const bytes = canonicalBytes(fields);
+  const entry = { role: 'agent', signer: AGENT_ID, alg: 'Ed25519', key: bareJwk(agent.publicJwk), signature: signBytes(bytes, agent.privateJwk) };
+  return { ...fields, id: sha256Digest(bytes), signatures: [entry] } as unknown as Receipt;
+}
+
+function coreWithout(member: string): Record<string, unknown> {
+  const fields = core() as unknown as Record<string, unknown>;
+  delete fields[member];
+  return fields;
 }
 
 // A second registry countersigns an already registered receipt. registrySign
@@ -240,4 +255,52 @@ test('reordering a valid receipt signature array does not change the verdict', (
   const after = verifyReceipt(reordered, { registryKeys: [registry.publicJwk] });
   assert.equal(after.ok, true);
   assert.deepEqual(after.checks, before.checks);
+});
+
+test('verifyReceipt returns a result for hostile input instead of throwing', () => {
+  const valid = registered();
+  const withSignatures = (signatures: unknown) => ({ ...valid, signatures }) as unknown as Receipt;
+  const cases: Array<[string, Receipt]> = [
+    ['null', null as unknown as Receipt],
+    ['undefined', undefined as unknown as Receipt],
+    ['a number', 42 as unknown as Receipt],
+    ['a string', 'receipt' as unknown as Receipt],
+    ['an array', [] as unknown as Receipt],
+    ['an empty object', {} as unknown as Receipt],
+    ['signatures deleted', coreWithout('signatures') as unknown as Receipt],
+    ['signatures null', withSignatures(null)],
+    ['signatures an object', withSignatures({})],
+    ['signatures holding null', withSignatures([null])],
+    ['signatures holding a number', withSignatures([42])],
+    ['an entry with no role', withSignatures([{ signer: AGENT_ID, alg: 'Ed25519', signature: 'A'.repeat(86) }])],
+  ];
+  for (const [label, value] of cases) {
+    const result = verifyReceipt(value, { registryKeys: [registry.publicJwk] });
+    assert.equal(result.ok, false, label);
+    assert.ok(result.checks.length > 0, label);
+  }
+  const nulled = verifyReceipt(withSignatures([null, ...valid.signatures]), { registryKeys: [registry.publicJwk] });
+  assert.equal(nulled.ok, false);
+  assert.ok(nulled.checks.some((c) => c.status === 'fail' && /not an object/.test(c.detail)), 'the null entry is a failing check');
+  const roleless = verifyReceipt(withSignatures([{ signer: AGENT_ID }, ...valid.signatures]), { registryKeys: [registry.publicJwk] });
+  assert.equal(roleless.ok, false);
+  assert.ok(roleless.checks.some((c) => c.status === 'fail' && /role/.test(c.detail)), 'the roleless entry is a failing check');
+});
+
+test('a receipt that is not structurally conformant fails integrity, naming the member', () => {
+  assert.equal(receiptShapeProblem(registered()), undefined);
+  const cases: Array<[string, Receipt, RegExp]> = [
+    ['no action', forge(coreWithout('action')), /action/],
+    ['inputs is an object', forge({ ...core(), inputs: {} }), /inputs/],
+    ['policy is a string', forge({ ...core(), policy: 'default' }), /policy/],
+    ['id is not a digest', { ...forge({ ...core() }), id: 'receipt-1' } as Receipt, /id/],
+  ];
+  for (const [label, receipt, member] of cases) {
+    const result = verifyReceipt(receipt, { registryKeys: [registry.publicJwk] });
+    assert.equal(result.ok, false, label);
+    assert.deepEqual(result.checks.map((c) => [c.name, c.status]), [
+      ['integrity', 'fail'], ['agent_signature', 'fail'], ['agent_identity', 'fail'],
+    ], label);
+    assert.match(result.checks[0]?.detail ?? '', member, label);
+  }
 });

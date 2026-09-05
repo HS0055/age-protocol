@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   agentSign, registrySign, buildRoot, proofFor, verifyRoot, verifyRootInclusion, sequenceOf, rootLeaves,
   rootSigningInput, generateKeyPair, agentIdOf, registryIdOf, canonicalBytes, verifyBytes, ROOT_VERSION, RECEIPT_VERSION,
-  type Receipt, type ReceiptCore, type RootDocument,
+  type PublicJwk, type Receipt, type ReceiptCore, type RootDocument, type RootProof,
 } from '../src/index.ts';
 
 const agent = generateKeyPair();
@@ -65,4 +65,25 @@ test('buildRoot needs receipts and sequenceOf needs a registration', () => {
   const unregistered = agentSign({ ...five, signatures: [] } as unknown as ReceiptCore, agent.privateJwk);
   assert.throws(() => sequenceOf(unregistered), /not registered/);
   assert.throws(() => proofFor([five], six), /not among/);
+});
+
+test('verifyRoot and verifyRootInclusion answer false for malformed input instead of throwing', () => {
+  const all = [five, six, seven];
+  const doc = buildRoot(all, '2026-09-05', registry.privateJwk);
+  const proof = proofFor(all, six);
+  for (const value of [null, undefined, 42, 'root', [], {}, true]) {
+    const label = String(value);
+    assert.equal(verifyRoot(value as unknown as RootDocument, [registry.publicJwk]), false, `root ${label}`);
+    assert.equal(verifyRootInclusion(six, proof, value as unknown as RootDocument), false, `doc ${label}`);
+    assert.equal(verifyRootInclusion(value as unknown as Receipt, proof, doc), false, `receipt ${label}`);
+    assert.equal(verifyRootInclusion(six, value as unknown as RootProof, doc), false, `proof ${label}`);
+  }
+  assert.equal(verifyRoot({ ...doc, signature: null } as unknown as RootDocument, [registry.publicJwk]), false);
+  assert.equal(verifyRoot({ ...doc, registry: null } as unknown as RootDocument, [registry.publicJwk]), false);
+  assert.equal(verifyRoot(doc, null as unknown as PublicJwk[]), false);
+  assert.equal(verifyRoot(doc, [null] as unknown as PublicJwk[]), false);
+  assert.equal(verifyRootInclusion(six, { ...proof, path: null } as unknown as RootProof, doc), false);
+  assert.equal(verifyRootInclusion(six, { ...proof, index: 'one' } as unknown as RootProof, doc), false);
+  assert.equal(verifyRootInclusion(six, proof, { ...doc, sequence_start: 'five' } as unknown as RootDocument), false);
+  assert.equal(verifyRootInclusion(six, proof, { ...doc, root: 42 } as unknown as RootDocument), false);
 });
