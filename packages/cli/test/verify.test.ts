@@ -1,284 +1,177 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  generateKeyPair, nodeSign, cloudSign, receiptHash, canonicalBytes, merkleRoot, inclusionProof, signBytes, thumbprint,
-  RECEIPT_TYP, ROOT_TYP,
-  type ReceiptEnvelope, type Receipt,
+  agentSign, registrySign, buildRoot, proofFor, generateKeyPair, agentIdOf, bareJwk,
+  RECEIPT_VERSION, type Receipt, type ReceiptCore,
 } from '@ageprotocol/receipts';
 import { runVerify } from '../src/verify.ts';
 
-const node = generateKeyPair();
-const cloud = generateKeyPair();
+const agent = generateKeyPair();
+const registry = generateKeyPair();
+const COMMIT = '8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918';
+const JWKS_URL = 'https://registry.test/.well-known/age-jwks.json';
 
-function envelope(seq: number): ReceiptEnvelope {
+function core(overrides: Partial<ReceiptCore> = {}): ReceiptCore {
   return {
-    typ: RECEIPT_TYP, v: 1, ts: '2026-09-04T00:00:00Z', company: 'org', mission: 'msn_1', task: 'tsk_1', run: 'run_1',
-    actor: { type: 'agent', jkt: 'agent', level: 0 }, node: { jkt: thumbprint(node.publicJwk) }, cloud: { jkt: thumbprint(cloud.publicJwk) },
-    action: { type: 'git.commit' }, inputs: [], outputs: [], gate: null,
+    receipt_version: RECEIPT_VERSION, agent: agentIdOf(agent.publicJwk), timestamp: '2026-09-05T03:20:00Z',
+    task: { id: 'tsk_91', description: 'Fix authentication bug' },
+    action: { type: 'git.commit', commit: COMMIT, files_changed: 3, tests: 'passed' },
+    inputs: [], outputs: [{ kind: 'commit', digest: `sha256:${'bb'.repeat(32)}`, ref: COMMIT }],
+    environment: { runtime: 'claude-code/2.1.0' }, policy: null, ...overrides,
   };
 }
 
-function issue(seq: number, prev: string | null): Receipt {
-  return cloudSign(nodeSign(envelope(seq), node.privateJwk), { id: `rcpt_${seq}`, seq, prev }, cloud.privateJwk);
-}
+const unregistered = agentSign(core(), agent.privateJwk);
+const receipt = registrySign(unregistered, { sequence: 184, registered_at: '2026-09-05T03:20:04Z', jwks: JWKS_URL }, registry.privateJwk);
+const root = buildRoot([receipt], '2026-09-05', registry.privateJwk);
+const proof = proofFor([receipt], receipt);
+const jwks = { keys: [bareJwk(registry.publicJwk)] };
 
-const r1 = issue(1, null);
-const r2 = issue(2, receiptHash(r1));
-const leaves = [r1, r2].map((r) => canonicalBytes(r));
-const rootHex = merkleRoot(leaves).toString('hex');
-const rootDoc = { typ: ROOT_TYP, date: '2026-09-04', size: 2, root: rootHex, cloud: { jkt: thumbprint(cloud.publicJwk) }, sig: '' };
-rootDoc.sig = signBytes(
-  canonicalBytes({ typ: rootDoc.typ, date: rootDoc.date, size: rootDoc.size, root: rootDoc.root }),
-  cloud.privateJwk,
-);
-
-function files(extra: Record<string, unknown> = {}) {
-  const store: Record<string, string> = {
-    'receipt.json': JSON.stringify(r2),
-    'jwks.json': JSON.stringify({ keys: [node.publicJwk, cloud.publicJwk] }),
-    'chain.json': JSON.stringify([r1, r2]),
-    'root.json': JSON.stringify(rootDoc),
-    'proof.json': JSON.stringify(inclusionProof(leaves, 1)),
-    ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, JSON.stringify(v)])),
+function harness(extraFiles: Record<string, unknown> = {}, options: { commitExists?: boolean; urls?: Record<string, unknown> } = {}) {
+  const files: Record<string, string> = {
+    'receipt.json': JSON.stringify(receipt),
+    'unregistered.json': JSON.stringify(unregistered),
+    'jwks.json': JSON.stringify(jwks),
+    'root.json': JSON.stringify(root),
+    'proof.json': JSON.stringify(proof),
+    ...Object.fromEntries(Object.entries(extraFiles).map(([k, v]) => [k, JSON.stringify(v)])),
   };
+  const urls: Record<string, string> = Object.fromEntries(
+    Object.entries({ [JWKS_URL]: jwks, ...(options.urls ?? {}) }).map(([k, v]) => [k, JSON.stringify(v)]),
+  );
   const out: string[] = [];
   const err: string[] = [];
+  const fetched: string[] = [];
   const io = {
     readFile: async (path: string) => {
-      const text = store[path];
+      const text = files[path];
       if (text === undefined) throw new Error(`ENOENT: ${path}`);
       return text;
     },
+    fetchText: async (url: string) => {
+      fetched.push(url);
+      const text = urls[url];
+      if (text === undefined) throw new Error(`HTTP 404 fetching ${url}`);
+      return text;
+    },
+    gitCommitExists: async () => options.commitExists ?? true,
     stdout: (line: string) => out.push(line),
     stderr: (line: string) => err.push(line),
   };
-  return { io, out, err };
+  return { io, out, err, fetched };
 }
 
-test('verifies signatures only', async () => {
-  const { io, out } = files();
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json'], io);
-  assert.equal(code, 0);
-  assert.equal(out.join('\n'), ['receipt  rcpt_2', 'node     valid', 'cloud    valid', 'chain    skipped', 'root     skipped', 'result   verified'].join('\n'));
+const REGISTRY_SIGNER = receipt.signatures[1]?.signer;
+
+const VERIFIED_LINES = [
+  `✓ Receipt integrity      ${receipt.id}`,
+  `✓ Agent signature        ${receipt.agent}`,
+  '✓ Agent identity         key thumbprint matches id',
+  `✓ Registry signature     ${REGISTRY_SIGNER}  sequence #184`,
+  '✓ Commit binding         8fa72c1 (3 files)',
+  'VERIFIED',
+];
+
+test('a registered receipt with a jwks file prints five checks and VERIFIED', async () => {
+  const { io, out } = harness();
+  assert.equal(await runVerify(['receipt.json', '--jwks', 'jwks.json'], io), 0);
+  assert.deepEqual(out, VERIFIED_LINES);
 });
 
-test('verifies chain, root signature, and inclusion', async () => {
-  const { io, out } = files();
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--chain', 'chain.json', '--root', 'root.json', '--proof', 'proof.json'], io);
-  assert.equal(code, 0);
-  assert.ok(out.includes('chain    valid (2 receipts)'));
-  assert.ok(out.includes('root     valid (2026-09-04, size 2, included)'));
+test('one changed byte fails integrity and the agent signature with exit 1', async () => {
+  const tampered = { ...receipt, task: { ...receipt.task, description: 'Fix authentication bug!' } };
+  const { io, out } = harness({ 'tampered.json': tampered });
+  assert.equal(await runVerify(['tampered.json', '--jwks', 'jwks.json'], io), 1);
+  assert.equal(out[0], '✗ Receipt integrity      mismatch');
+  assert.match(out[1] ?? '', /^✗ Agent signature/);
+  assert.equal(out.at(-1), 'FAILED');
 });
 
-test('fails with exit 1 on a tampered receipt', async () => {
-  const { io, out, err } = files({ 'receipt.json': { ...r2, seq: 99 } });
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json'], io);
-  assert.equal(code, 1);
-  assert.ok(out.includes('result   FAILED'));
-  assert.ok(err.some((line) => /signature does not verify/.test(line)));
+test('the registry key is fetched from a jwks URL, or from the hint in the receipt', async () => {
+  const viaFlag = harness();
+  assert.equal(await runVerify(['receipt.json', '--jwks', JWKS_URL], viaFlag.io), 0);
+  assert.deepEqual(viaFlag.fetched, [JWKS_URL]);
+  const viaHint = harness();
+  assert.equal(await runVerify(['receipt.json'], viaHint.io), 0);
+  assert.deepEqual(viaHint.fetched, [JWKS_URL]);
+  assert.deepEqual(viaHint.out, VERIFIED_LINES);
 });
 
-test('fails when the receipt is not the last element of the chain', async () => {
-  const { io, err } = files({ 'receipt.json': r1 });
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--chain', 'chain.json'], io);
-  assert.equal(code, 1);
-  assert.ok(err.some((line) => /last element/.test(line)));
+test('--offline without --jwks cannot check the registry signature and fails', async () => {
+  const { io, out, fetched } = harness();
+  assert.equal(await runVerify(['receipt.json', '--offline'], io), 1);
+  assert.deepEqual(fetched, []);
+  assert.match(out[3] ?? '', /^✗ Registry signature     registry key .* not available/);
+  assert.equal(out.at(-1), 'FAILED');
 });
 
-test('fails when the root signature is wrong', async () => {
-  const { io, err } = files({ 'root.json': { ...rootDoc, sig: (rootDoc.sig.startsWith('A') ? 'B' : 'A') + rootDoc.sig.slice(1) } });
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
-  assert.equal(code, 1);
-  assert.ok(err.some((line) => /root signature/.test(line)));
+test('an unregistered receipt skips the registry check and is still VERIFIED', async () => {
+  const { io, out } = harness();
+  assert.equal(await runVerify(['unregistered.json', '--offline'], io), 0);
+  assert.equal(out[3], '- Registry signature     absent, unregistered receipt');
+  assert.equal(out.at(-1), 'VERIFIED');
 });
 
-test('a root document with the wrong typ fails', async () => {
-  const { io, out, err } = files({ 'root.json': { ...rootDoc, typ: 'agie/receipt/1' } });
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
-  assert.equal(code, 1);
-  assert.ok(out.includes('root     invalid'));
-  assert.ok(err.some((line) => /typ/.test(line)));
+test('--repo checks that the commit exists', async () => {
+  const present = harness({}, { commitExists: true });
+  assert.equal(await runVerify(['receipt.json', '--jwks', 'jwks.json', '--repo', '/tmp/demo'], present.io), 0);
+  assert.equal(present.out[4], '✓ Commit binding         8fa72c1 exists in /tmp/demo (3 files)');
+  const missing = harness({}, { commitExists: false });
+  assert.equal(await runVerify(['receipt.json', '--jwks', 'jwks.json', '--repo', '/tmp/demo'], missing.io), 1);
+  assert.match(missing.out[4] ?? '', /^✗ Commit binding         commit .* not found in \/tmp\/demo/);
 });
 
-test('malformed root file without cloud exits 2', async () => {
-  const { io, err } = files({ 'root.json': { typ: rootDoc.typ, date: rootDoc.date, size: rootDoc.size, root: rootDoc.root, sig: rootDoc.sig } });
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
-  assert.equal(code, 2);
-  assert.ok(err.some((line) => /root file/.test(line)));
+test('commit binding is skipped for a non-commit action and fails for a malformed or unlisted commit', async () => {
+  const research = registrySign(agentSign(core({ action: { type: 'research.report' }, outputs: [] }), agent.privateJwk), { sequence: 1, registered_at: '2026-09-05T00:00:00Z' }, registry.privateJwk);
+  const bad = registrySign(agentSign(core({ action: { type: 'git.commit', commit: 'nope' } }), agent.privateJwk), { sequence: 2, registered_at: '2026-09-05T00:00:00Z' }, registry.privateJwk);
+  const unlisted = registrySign(agentSign(core({ outputs: [] }), agent.privateJwk), { sequence: 3, registered_at: '2026-09-05T00:00:00Z' }, registry.privateJwk);
+  const a = harness({ 'r.json': research });
+  assert.equal(await runVerify(['r.json', '--jwks', 'jwks.json'], a.io), 0);
+  assert.equal(a.out[4], '- Commit binding         action research.report is not a commit');
+  const b = harness({ 'b.json': bad });
+  assert.equal(await runVerify(['b.json', '--jwks', 'jwks.json'], b.io), 1);
+  assert.equal(b.out[4], '✗ Commit binding         commit hash missing or malformed');
+  const c = harness({ 'u.json': unlisted });
+  assert.equal(await runVerify(['u.json', '--jwks', 'jwks.json'], c.io), 1);
+  assert.equal(c.out[4], '✗ Commit binding         commit is not among the outputs');
 });
 
-test('usage errors exit 2', async () => {
-  const { io, err } = files();
+test('--root and --proof add a root inclusion check', async () => {
+  const good = harness();
+  assert.equal(await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], good.io), 0);
+  assert.equal(good.out[5], '✓ Root inclusion         2026-09-05 sequence 184 to 184');
+  assert.equal(good.out[6], 'VERIFIED');
+  const forged = harness({ 'root.json': { ...root, date: '2026-09-06' } });
+  assert.equal(await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], forged.io), 1);
+  assert.equal(forged.out[5], '✗ Root inclusion         root signature does not verify');
+});
+
+test('--json prints the checks as data', async () => {
+  const { io, out } = harness();
+  assert.equal(await runVerify(['receipt.json', '--jwks', 'jwks.json', '--json'], io), 0);
+  const parsed = JSON.parse(out.join('\n')) as { ok: boolean; receipt: string; agent: string; checks: Array<{ name: string; status: string }> };
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.receipt, receipt.id);
+  assert.equal(parsed.agent, receipt.agent);
+  assert.deepEqual(parsed.checks.map((c) => c.name), ['integrity', 'agent_signature', 'agent_identity', 'registry_signature', 'commit_binding']);
+});
+
+test('usage and input errors exit 2', async () => {
+  const { io, err } = harness({ 'array.json': [], 'badjwks.json': { keys: 'nope' } });
   assert.equal(await runVerify([], io), 2);
-  assert.equal(await runVerify(['receipt.json'], io), 2);
-  assert.equal(await runVerify(['receipt.json', '--jwks', 'missing.json'], io), 2);
-  assert.equal(await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json'], io), 2);
-  assert.ok(err.length > 0);
+  assert.equal(await runVerify(['receipt.json', '--jwks'], io), 2);
+  assert.equal(await runVerify(['receipt.json', '--chian', 'x.json'], io), 2);
+  assert.equal(await runVerify(['receipt.json', '--root', 'root.json'], io), 2);
+  assert.equal(await runVerify(['missing.json', '--offline'], io), 2);
+  assert.equal(await runVerify(['array.json', '--offline'], io), 2);
+  assert.equal(await runVerify(['receipt.json', '--jwks', 'badjwks.json'], io), 2);
+  assert.ok(err.some((line) => line.startsWith('unknown flag: --chian')));
+  assert.ok(err.some((line) => line.startsWith('cannot read input:')));
 });
 
-test('a JWKS without kid labels verifies both the receipt and the root', async () => {
-  const bare = [node.publicJwk, cloud.publicJwk].map(({ kty, crv, x }) => ({ kty, crv, x }));
-  const { io, out } = files({ 'jwks.json': { keys: bare } });
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
-  assert.equal(code, 0);
-  assert.ok(out.includes('node     valid'));
-  assert.ok(out.includes('root     valid (2026-09-04, size 2, included)'));
-});
-
-test('a JWKS entry mislabelled with the node kid is not trusted', async () => {
-  const impostor = { ...generateKeyPair().publicJwk, kid: thumbprint(node.publicJwk) };
-  const { io, out } = files({ 'jwks.json': { keys: [impostor, cloud.publicJwk] } });
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json'], io);
-  assert.equal(code, 1);
-  assert.ok(out.includes('node     unknown_key'));
-});
-
-test('an unknown flag is an input error', async () => {
-  const { io, err } = files();
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--chian', 'chain.json'], io);
-  assert.equal(code, 2);
-  assert.ok(err.some((line) => /unknown flag/.test(line)));
-});
-
-const malformed: Array<[string, Record<string, unknown>]> = [
-  ['receipt that is an array', { 'receipt.json': [] }],
-  ['receipt without typ', { 'receipt.json': { ...r2, typ: undefined } }],
-  ['receipt with a non-string id', { 'receipt.json': { ...r2, id: 7 } }],
-  ['receipt without node', { 'receipt.json': { ...r2, node: undefined } }],
-  ['receipt with a node without jkt', { 'receipt.json': { ...r2, node: {} } }],
-  ['receipt without cloud', { 'receipt.json': { ...r2, cloud: undefined } }],
-  ['receipt without cloud_sig', { 'receipt.json': { ...r2, cloud_sig: undefined } }],
-  ['jwks with a null key', { 'jwks.json': { keys: [null] } }],
-  ['jwks with a key without x', { 'jwks.json': { keys: [{ kty: 'OKP', crv: 'Ed25519' }] } }],
-  ['jwks that is not an object', { 'jwks.json': [] }],
-];
-
-for (const [name, extra] of malformed) {
-  test(`${name} exits 2`, async () => {
-    const { io, err } = files(extra);
-    const code = await runVerify(['receipt.json', '--jwks', 'jwks.json'], io);
-    assert.equal(code, 2);
-    assert.ok(err.some((line) => /cannot read input/.test(line)), err.join('|'));
-  });
-}
-
-const malformedChain: Array<[string, unknown]> = [
-  ['chain that is null', null],
-  ['chain that is an object', {}],
-  ['chain with a null element', [null, r2]],
-  ['chain with a receipt without cloud', [{ ...r1, cloud: undefined }, r2]],
-];
-
-for (const [name, value] of malformedChain) {
-  test(`${name} exits 2`, async () => {
-    const { io, err } = files({ 'chain.json': value });
-    const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--chain', 'chain.json'], io);
-    assert.equal(code, 2);
-    assert.ok(err.some((line) => /cannot read input/.test(line)), err.join('|'));
-  });
-}
-
-const goodProof = inclusionProof(leaves, 1);
-const malformedProof: Array<[string, unknown]> = [
-  ['proof that is null', null],
-  ['proof that is a number', 0],
-  ['proof without path', { index: 1, size: 2 }],
-  ['proof with a numeric path', { ...goodProof, path: 5 }],
-  ['proof with a numeric path entry', { ...goodProof, path: [1] }],
-  ['proof with a short hex path entry', { ...goodProof, path: ['abcd'] }],
-  ['proof without an integer index', { ...goodProof, index: 1.5 }],
-  ['proof without an integer size', { ...goodProof, size: 'two' }],
-];
-
-for (const [name, value] of malformedProof) {
-  test(`${name} exits 2`, async () => {
-    const { io, err } = files({ 'proof.json': value });
-    const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
-    assert.equal(code, 2);
-    assert.ok(err.some((line) => /cannot read input/.test(line)), err.join('|'));
-  });
-}
-
-const malformedRoot: Array<[string, unknown]> = [
-  ['root that is null', null],
-  ['root that is an array', []],
-  ['root without typ', { ...rootDoc, typ: undefined }],
-  ['root without an integer size', { ...rootDoc, size: 'two' }],
-  ['root without sig', { ...rootDoc, sig: undefined }],
-];
-
-for (const [name, value] of malformedRoot) {
-  test(`${name} exits 2`, async () => {
-    const { io, err } = files({ 'root.json': value });
-    const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
-    assert.equal(code, 2);
-    assert.ok(err.some((line) => /cannot read input/.test(line)), err.join('|'));
-  });
-}
-
-test('an exception in the verification phase is reported, not thrown', async () => {
-  const { io, err } = files();
-  const broken = { ...io, stdout: () => { throw new Error('boom'); } };
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json'], broken);
-  assert.equal(code, 2);
-  assert.ok(err.some((line) => /internal error: boom/.test(line)), err.join('|'));
-});
-
-test('chain mode verifies the signatures of every receipt, not just the last', async () => {
-  const broken = { ...r1, cloud_sig: 'A'.repeat(86) } as Receipt;
-  const next = issue(2, receiptHash(broken));
-  const { io, out, err } = files({ 'receipt.json': next, 'chain.json': [broken, next] });
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--chain', 'chain.json'], io);
-  assert.equal(code, 1);
-  assert.ok(out.includes('chain    invalid'), out.join('|'));
-  assert.ok(err.some((line) => /chain receipt 0/.test(line)), err.join('|'));
-});
-
-test('chain mode reports an earlier receipt signed by an unknown key', async () => {
-  const stranger = generateKeyPair();
-  const strange = cloudSign(nodeSign(envelope(1), node.privateJwk), { id: 'rcpt_1', seq: 1, prev: null }, stranger.privateJwk);
-  const next = issue(2, receiptHash(strange));
-  const { io, out } = files({ 'receipt.json': next, 'chain.json': [strange, next] });
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--chain', 'chain.json'], io);
-  assert.equal(code, 1);
-  assert.ok(out.includes('chain    invalid'), out.join('|'));
-});
-
-test('a proof whose size differs from the root document fails', async () => {
-  const { io, out, err } = files({ 'proof.json': { ...inclusionProof(leaves, 1), size: 3 } });
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--root', 'root.json', '--proof', 'proof.json'], io);
-  assert.equal(code, 1);
-  assert.ok(out.includes('root     size mismatch'), out.join('|'));
-  assert.ok(err.some((line) => /size/.test(line)), err.join('|'));
-});
-
-test('control characters in echoed strings are stripped', async () => {
-  const nasty = cloudSign(
-    nodeSign(envelope(3), node.privateJwk),
-    { id: 'rcpt_\u001b[2K\u0007red', seq: 3, prev: null },
-    cloud.privateJwk,
-  );
-  const { io, out } = files({ 'receipt.json': nasty });
-  await runVerify(['receipt.json', '--jwks', 'jwks.json'], io);
-  assert.equal(out[0], 'receipt  rcpt_[2Kred');
-  assert.ok(out.every((line) => !/[\u0000-\u001f\u007f]/.test(line)), out.join('|'));
-});
-
-test('control characters in an error message are stripped', async () => {
-  const nasty = cloudSign(
-    nodeSign({ ...envelope(4), node: { jkt: 'jkt\u001b[31m evil' } }, node.privateJwk),
-    { id: 'rcpt_4', seq: 4, prev: null },
-    cloud.privateJwk,
-  );
-  const { io, err } = files({ 'receipt.json': nasty });
-  await runVerify(['receipt.json', '--jwks', 'jwks.json'], io);
-  assert.ok(err.some((line) => line === 'node key jkt[31m evil not in key set'), err.join('|'));
-  assert.ok(err.every((line) => !/[\u0000-\u001f\u007f]/.test(line)), err.join('|'));
-});
-
-test('control characters in a usage error are stripped', async () => {
-  const { io, err } = files();
-  const code = await runVerify(['receipt.json', '--jwks', 'jwks.json', '--ch\u001bain', 'chain.json'], io);
-  assert.equal(code, 2);
-  assert.ok(err.some((line) => line === 'unknown flag: --chain'), err.join('|'));
+test('control characters from the input never reach the terminal', async () => {
+  const noisy = { ...unregistered, id: `${unregistered.id}\u001b[2K` };
+  const { io, out } = harness({ 'noisy.json': noisy });
+  await runVerify(['noisy.json', '--offline'], io);
+  assert.equal(out.some((line) => line.includes('\u001b')), false);
 });

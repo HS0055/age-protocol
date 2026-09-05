@@ -1,123 +1,124 @@
 import {
-  canonicalBytes, isPublicJwk, keyMapFromJwks, verifyBytes, verifyChain, verifyInclusion, verifyReceipt, ROOT_TYP,
-  type InclusionProof, type PublicJwk, type Receipt,
+  isPublicJwk, keyMapFromJwks, verifyReceipt, verifyRoot, verifyRootInclusion, registrySignatureOf,
+  type Check, type CheckStatus, type PublicJwk, type Receipt, type RootDocument, type RootProof,
 } from '@ageprotocol/receipts';
 
 export interface VerifyIo {
   readFile(path: string): Promise<string>;
+  fetchText(url: string): Promise<string>;
+  gitCommitExists(repo: string, commit: string): Promise<boolean>;
   stdout(line: string): void;
   stderr(line: string): void;
 }
 
-export const VERIFY_USAGE = 'usage: agectl verify <receipt.json> --jwks <jwks.json> [--chain <receipts.json>] [--root <root.json> --proof <proof.json>]';
+export const VERIFY_USAGE =
+  'usage: agectl verify <receipt.json> [--jwks <file or url>] [--repo <path>] [--root <root.json> --proof <proof.json>] [--offline] [--json]';
 
-const KNOWN_FLAGS = ['jwks', 'chain', 'root', 'proof'];
+const VALUE_FLAGS = ['jwks', 'repo', 'root', 'proof'];
+const BOOLEAN_FLAGS = ['offline', 'json'];
 
 interface ParsedArgs {
   receipt: string;
-  jwks: string;
-  chain?: string;
+  jwks?: string;
+  repo?: string;
   root?: string;
   proof?: string;
+  offline: boolean;
+  json: boolean;
 }
 
 function parseArgs(args: string[]): ParsedArgs | string {
   const positional: string[] = [];
-  const flags: Record<string, string> = {};
+  const values: Record<string, string> = {};
+  const booleans = new Set<string>();
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i] as string;
-    if (arg.startsWith('--')) {
-      const name = arg.slice(2);
-      if (!KNOWN_FLAGS.includes(name)) return `unknown flag: ${arg}`;
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith('--')) return `missing value for ${arg}`;
-      flags[name] = value;
-      i += 1;
-    } else {
+    if (!arg.startsWith('--')) {
       positional.push(arg);
+      continue;
     }
+    const name = arg.slice(2);
+    if (BOOLEAN_FLAGS.includes(name)) {
+      booleans.add(name);
+      continue;
+    }
+    if (!VALUE_FLAGS.includes(name)) return `unknown flag: ${arg}`;
+    const value = args[i + 1];
+    if (value === undefined || value.startsWith('--')) return `missing value for ${arg}`;
+    values[name] = value;
+    i += 1;
   }
   if (positional.length !== 1) return 'expected exactly one receipt file';
-  if (!flags.jwks) return '--jwks is required';
-  if ((flags.root && !flags.proof) || (flags.proof && !flags.root)) return '--root and --proof must be given together';
-  return { receipt: positional[0] as string, jwks: flags.jwks, chain: flags.chain, root: flags.root, proof: flags.proof };
+  if ((values.root && !values.proof) || (values.proof && !values.root)) return '--root and --proof must be given together';
+  return {
+    receipt: positional[0] as string,
+    jwks: values.jwks,
+    repo: values.repo,
+    root: values.root,
+    proof: values.proof,
+    offline: booleans.has('offline'),
+    json: booleans.has('json'),
+  };
 }
-
-async function readJson(io: VerifyIo, path: string): Promise<unknown> {
-  return JSON.parse(await io.readFile(path)) as unknown;
-}
-
-interface RootDoc {
-  typ: string;
-  date: string;
-  size: number;
-  root: string;
-  cloud: { jkt: string };
-  sig: string;
-}
-
-// Input shapes are checked before any verification runs, so a malformed file
-// is an input error with a message and never an exception out of a check.
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-const HEX_32_BYTES = /^[0-9a-fA-F]{64}$/;
+function isUrl(value: string): boolean {
+  return value.startsWith('http://') || value.startsWith('https://');
+}
 
-function receiptProblem(value: unknown, label: string): string | undefined {
-  if (!isObject(value)) return `${label} must be an object`;
-  if (typeof value.typ !== 'string') return `${label} has no typ`;
-  if (typeof value.id !== 'string') return `${label} id must be a string`;
-  const node = value.node;
-  if (node !== null && !(isObject(node) && typeof node.jkt === 'string')) {
-    return `${label} node must be null or an object with a jkt string`;
+const HEX_32_BYTES = /^[0-9a-fA-F]{64}$/;
+const COMMIT_HASH = /^[0-9a-f]{40}$/;
+
+// Input shapes are checked before any check runs, so a malformed file is an
+// input error with a message and never an exception out of a check.
+function receiptProblem(value: unknown): string | undefined {
+  if (!isObject(value)) return 'receipt must be an object';
+  if (typeof value.receipt_version !== 'string') return 'receipt has no receipt_version';
+  if (typeof value.id !== 'string') return 'receipt id must be a string';
+  if (typeof value.agent !== 'string') return 'receipt agent must be a string';
+  if (!isObject(value.action) || typeof value.action.type !== 'string') return 'receipt action.type must be a string';
+  if (!Array.isArray(value.inputs) || !Array.isArray(value.outputs)) return 'receipt inputs and outputs must be arrays';
+  if (!Array.isArray(value.signatures)) return 'receipt signatures must be an array';
+  for (let i = 0; i < value.signatures.length; i += 1) {
+    const entry: unknown = value.signatures[i];
+    if (!isObject(entry) || typeof entry.role !== 'string' || typeof entry.signer !== 'string' || typeof entry.signature !== 'string') {
+      return `receipt signature ${i} must have role, signer, and signature strings`;
+    }
   }
-  if (!(isObject(value.cloud) && typeof value.cloud.jkt === 'string')) {
-    return `${label} cloud must be an object with a jkt string`;
-  }
-  if (typeof value.cloud_sig !== 'string') return `${label} cloud_sig must be a string`;
   return undefined;
 }
 
 function jwksProblem(value: unknown): string | undefined {
-  if (!isObject(value) || !Array.isArray(value.keys)) return 'jwks file has no keys array';
+  if (!isObject(value) || !Array.isArray(value.keys)) return 'jwks has no keys array';
   for (let i = 0; i < value.keys.length; i += 1) {
     if (!isPublicJwk(value.keys[i])) return `jwks key ${i} is not a public JWK`;
   }
   return undefined;
 }
 
-function chainProblem(value: unknown): string | undefined {
-  if (!Array.isArray(value)) return 'chain file must be an array of receipts';
-  for (let i = 0; i < value.length; i += 1) {
-    const problem = receiptProblem(value[i], `chain receipt ${i}`);
-    if (problem !== undefined) return problem;
-  }
-  return undefined;
-}
-
 function rootProblem(value: unknown): string | undefined {
   if (!isObject(value)) return 'root file must be an object';
-  if (typeof value.typ !== 'string') return 'root file has no typ';
+  if (typeof value.root_version !== 'string') return 'root file has no root_version';
+  if (typeof value.registry !== 'string') return 'root file registry must be a string';
   if (typeof value.date !== 'string') return 'root file date must be a string';
-  if (!Number.isInteger(value.size)) return 'root file size must be an integer';
+  if (!Number.isInteger(value.sequence_start) || !Number.isInteger(value.sequence_end)) return 'root file sequence range must be integers';
   if (typeof value.root !== 'string') return 'root file root must be a string';
-  if (!(isObject(value.cloud) && typeof value.cloud.jkt === 'string')) return 'root file has no cloud.jkt';
-  if (typeof value.sig !== 'string') return 'root file sig must be a string';
+  if (typeof value.signature !== 'string') return 'root file signature must be a string';
   return undefined;
 }
 
 function proofProblem(value: unknown): string | undefined {
   if (!isObject(value)) return 'proof file must be an object';
+  if (!Number.isInteger(value.sequence)) return 'proof sequence must be an integer';
   if (!Number.isInteger(value.index)) return 'proof index must be an integer';
   if (!Number.isInteger(value.size)) return 'proof size must be an integer';
   if (!Array.isArray(value.path)) return 'proof path must be an array';
   for (let i = 0; i < value.path.length; i += 1) {
     const entry: unknown = value.path[i];
-    if (typeof entry !== 'string' || !HEX_32_BYTES.test(entry)) {
-      return `proof path entry ${i} must be a 64 character hex string`;
-    }
+    if (typeof entry !== 'string' || !HEX_32_BYTES.test(entry)) return `proof path entry ${i} must be a 64 character hex string`;
   }
   return undefined;
 }
@@ -133,9 +134,11 @@ const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/g;
 function sanitized(io: VerifyIo): VerifyIo {
   const strip = (line: string) => line.replace(CONTROL_CHARACTERS, '');
   return {
-    readFile: (path: string) => io.readFile(path),
-    stdout: (line: string) => io.stdout(strip(line)),
-    stderr: (line: string) => io.stderr(strip(line)),
+    readFile: (path) => io.readFile(path),
+    fetchText: (url) => io.fetchText(url),
+    gitCommitExists: (repo, commit) => io.gitCommitExists(repo, commit),
+    stdout: (line) => io.stdout(strip(line)),
+    stderr: (line) => io.stderr(strip(line)),
   };
 }
 
@@ -145,114 +148,110 @@ function messageOf(error: unknown): string {
 
 interface Inputs {
   receipt: Receipt;
-  keys: PublicJwk[];
-  chain?: Receipt[];
-  root?: RootDoc;
-  proof?: InclusionProof;
+  registryKeys: PublicJwk[];
+  keySource: string;
+  root?: RootDocument;
+  proof?: RootProof;
+}
+
+async function readJson(io: VerifyIo, location: string): Promise<unknown> {
+  const text = isUrl(location) ? await io.fetchText(location) : await io.readFile(location);
+  return JSON.parse(text) as unknown;
 }
 
 async function readInputs(parsed: ParsedArgs, io: VerifyIo): Promise<Inputs> {
   const rawReceipt = await readJson(io, parsed.receipt);
-  reject(receiptProblem(rawReceipt, 'receipt'));
+  reject(receiptProblem(rawReceipt));
+  const receipt = rawReceipt as Receipt;
 
-  const rawJwks = await readJson(io, parsed.jwks);
-  reject(jwksProblem(rawJwks));
-
-  const inputs: Inputs = {
-    receipt: rawReceipt as Receipt,
-    keys: (rawJwks as { keys: PublicJwk[] }).keys,
-  };
-
-  if (parsed.chain !== undefined) {
-    const rawChain = await readJson(io, parsed.chain);
-    reject(chainProblem(rawChain));
-    inputs.chain = rawChain as Receipt[];
+  let registryKeys: PublicJwk[] = [];
+  let keySource = 'none';
+  const hint = registrySignatureOf(receipt)?.jwks;
+  const location = parsed.jwks ?? (parsed.offline ? undefined : hint);
+  if (location !== undefined) {
+    if (parsed.offline && isUrl(location)) throw new Error(`--offline forbids fetching ${location}`);
+    const rawJwks = await readJson(io, location);
+    reject(jwksProblem(rawJwks));
+    registryKeys = (rawJwks as { keys: PublicJwk[] }).keys;
+    keySource = location;
   }
-  if (parsed.root !== undefined) {
+
+  const inputs: Inputs = { receipt, registryKeys, keySource };
+  if (parsed.root !== undefined && parsed.proof !== undefined) {
     const rawRoot = await readJson(io, parsed.root);
     reject(rootProblem(rawRoot));
-    inputs.root = rawRoot as RootDoc;
-  }
-  if (parsed.proof !== undefined) {
     const rawProof = await readJson(io, parsed.proof);
     reject(proofProblem(rawProof));
-    inputs.proof = rawProof as InclusionProof;
+    inputs.root = rawRoot as RootDocument;
+    inputs.proof = rawProof as RootProof;
   }
   return inputs;
 }
 
-function runChecks(parsed: ParsedArgs, inputs: Inputs, io: VerifyIo): number {
-  const { receipt, keys, chain, root, proof } = inputs;
-  let failed = false;
-  const byThumbprint = keyMapFromJwks(keys);
-  io.stdout(`receipt  ${receipt.id}`);
-
-  const signatures = verifyReceipt(receipt, byThumbprint);
-  io.stdout(`node     ${signatures.node}`);
-  io.stdout(`cloud    ${signatures.cloud}`);
-  for (const error of signatures.errors) io.stderr(error);
-  if (!signatures.ok) failed = true;
-
-  // Keyed on the flags, so a check the user asked for either runs or is an
-  // input error. It can never be silently skipped.
-  if (parsed.chain !== undefined) {
-    if (chain === undefined) throw new Error('chain file was requested but not loaded');
-    const last = chain[chain.length - 1];
-    if (!last || last.id !== receipt.id || last.cloud_sig !== receipt.cloud_sig) {
-      io.stderr('receipt is not the last element of the chain file');
-      io.stdout('chain    invalid');
-      failed = true;
-    } else {
-      const result = verifyChain(chain);
-      for (const error of result.errors) io.stderr(error);
-      let signaturesOk = true;
-      for (let i = 0; i < chain.length; i += 1) {
-        const signed = verifyReceipt(chain[i] as Receipt, byThumbprint);
-        if (signed.ok) continue;
-        signaturesOk = false;
-        for (const error of signed.errors) io.stderr(`chain receipt ${i}: ${error}`);
-      }
-      const chainOk = result.ok && signaturesOk;
-      io.stdout(chainOk ? `chain    valid (${result.length} receipts)` : 'chain    invalid');
-      if (!chainOk) failed = true;
-    }
-  } else {
-    io.stdout('chain    skipped');
+async function commitBinding(receipt: Receipt, repo: string | undefined, io: VerifyIo): Promise<Check> {
+  const name = 'commit_binding';
+  const type = receipt.action.type;
+  if (type !== 'git.commit') return { name, status: 'skip', detail: `action ${type} is not a commit` };
+  const commit = receipt.action.commit;
+  if (typeof commit !== 'string' || !COMMIT_HASH.test(commit)) return { name, status: 'fail', detail: 'commit hash missing or malformed' };
+  const listed = receipt.outputs.some((output) => output.kind === 'commit' && output.ref === commit);
+  if (!listed) return { name, status: 'fail', detail: 'commit is not among the outputs' };
+  const files = receipt.action.files_changed;
+  const suffix = Number.isInteger(files) ? ` (${String(files)} files)` : '';
+  if (repo !== undefined) {
+    const exists = await io.gitCommitExists(repo, commit);
+    if (!exists) return { name, status: 'fail', detail: `commit ${commit} not found in ${repo}` };
+    return { name, status: 'pass', detail: `${commit.slice(0, 7)} exists in ${repo}${suffix}` };
   }
+  return { name, status: 'pass', detail: `${commit.slice(0, 7)}${suffix}` };
+}
 
-  if (parsed.root !== undefined) {
-    if (root === undefined || proof === undefined) throw new Error('root file was requested but not loaded');
-    const cloudKey = byThumbprint.get(root.cloud.jkt);
-    const rootBytes = canonicalBytes({ typ: ROOT_TYP, date: root.date, size: root.size, root: root.root });
-    if (root.typ !== ROOT_TYP) {
-      io.stderr(`root document typ ${root.typ} is not ${ROOT_TYP}`);
-      io.stdout('root     invalid');
-      failed = true;
-    } else if (proof.size !== root.size) {
-      io.stderr(`proof size ${proof.size} does not match root size ${root.size}`);
-      io.stdout('root     size mismatch');
-      failed = true;
-    } else if (!cloudKey) {
-      io.stderr(`root cloud key ${root.cloud.jkt} not in key set`);
-      io.stdout('root     unknown_key');
-      failed = true;
-    } else if (!verifyBytes(rootBytes, root.sig, cloudKey)) {
-      io.stderr('root signature does not verify');
-      io.stdout('root     invalid');
-      failed = true;
-    } else if (!verifyInclusion(canonicalBytes(receipt), proof, root.root)) {
-      io.stderr('receipt is not included in the published root');
-      io.stdout('root     not included');
-      failed = true;
-    } else {
-      io.stdout(`root     valid (${root.date}, size ${root.size}, included)`);
-    }
-  } else {
-    io.stdout('root     skipped');
+function rootInclusion(receipt: Receipt, root: RootDocument, proof: RootProof, keys: Map<string, PublicJwk>): Check {
+  const name = 'root_inclusion';
+  if (!verifyRoot(root, keys)) return { name, status: 'fail', detail: 'root signature does not verify' };
+  if (!verifyRootInclusion(receipt, proof, root)) return { name, status: 'fail', detail: 'receipt is not included in the root' };
+  return { name, status: 'pass', detail: `${root.date} sequence ${root.sequence_start} to ${root.sequence_end}` };
+}
+
+const LABELS: Record<string, string> = {
+  integrity: 'Receipt integrity',
+  agent_signature: 'Agent signature',
+  agent_identity: 'Agent identity',
+  registry_signature: 'Registry signature',
+  commit_binding: 'Commit binding',
+  root_inclusion: 'Root inclusion',
+};
+
+const MARKERS: Record<CheckStatus, string> = { pass: '✓', fail: '✗', skip: '-' };
+
+function labelOf(check: Check): string {
+  const known = LABELS[check.name];
+  if (known !== undefined) return known;
+  const role = check.name.replace(/_signature$/, '');
+  return `${role.charAt(0).toUpperCase()}${role.slice(1)} signature`;
+}
+
+function render(check: Check): string {
+  return `${MARKERS[check.status]} ${labelOf(check).padEnd(23)}${check.detail}`;
+}
+
+async function runChecks(parsed: ParsedArgs, inputs: Inputs, io: VerifyIo): Promise<number> {
+  const keys = keyMapFromJwks(inputs.registryKeys);
+  const result = verifyReceipt(inputs.receipt, { registryKeys: keys });
+  const checks: Check[] = [...result.checks];
+  checks.push(await commitBinding(inputs.receipt, parsed.repo, io));
+  if (inputs.root !== undefined && inputs.proof !== undefined) {
+    checks.push(rootInclusion(inputs.receipt, inputs.root, inputs.proof, keys));
   }
+  const ok = checks.every((check) => check.status !== 'fail');
 
-  io.stdout(failed ? 'result   FAILED' : 'result   verified');
-  return failed ? 1 : 0;
+  if (parsed.json) {
+    io.stdout(JSON.stringify({ ok, receipt: inputs.receipt.id, agent: inputs.receipt.agent, key_source: inputs.keySource, checks }, null, 2));
+  } else {
+    for (const check of checks) io.stdout(render(check));
+    io.stdout(ok ? 'VERIFIED' : 'FAILED');
+  }
+  return ok ? 0 : 1;
 }
 
 export async function runVerify(args: string[], rawIo: VerifyIo): Promise<number> {
@@ -273,7 +272,7 @@ export async function runVerify(args: string[], rawIo: VerifyIo): Promise<number
   }
 
   try {
-    return runChecks(parsed, inputs, io);
+    return await runChecks(parsed, inputs, io);
   } catch (error) {
     io.stderr(`internal error: ${messageOf(error)}`);
     return 2;
