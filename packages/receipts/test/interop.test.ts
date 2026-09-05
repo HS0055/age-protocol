@@ -39,6 +39,13 @@ function run(...args: string[]) {
   return spawnSync(PYTHON as string, [VERIFIER, VECTOR, ...args], { encoding: 'utf8' });
 }
 
+// verifyReceipt does not check root inclusion, so comparing it with a run that
+// does compares different questions. A Merkle leaf is the whole receipt, so
+// any signature-array change legitimately puts a receipt outside the root.
+function runReceipt(receipt: unknown) {
+  return spawnSync(PYTHON as string, [VERIFIER, VECTOR, JSON.stringify(receipt), '--no-root'], { encoding: 'utf8' });
+}
+
 test('a second implementation verifies every receipt in the golden vector', when, () => {
   const result = run();
   assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -120,7 +127,7 @@ test('the two implementations agree on malformed receipts, not just good ones', 
     } as unknown as Receipt;
 
     const reference = verifyReceipt(receipt, keys).ok;
-    const second = run(JSON.stringify(receipt)).status === 0;
+    const second = runReceipt(receipt).status === 0;
     assert.equal(reference, false, `the reference should reject: ${label}`);
     assert.equal(second, reference, `the two implementations disagree on: ${label}`);
   }
@@ -171,7 +178,7 @@ test('the two implementations agree on forged and malformed signature entries', 
     const receipt = JSON.parse(JSON.stringify(genuine)) as Receipt;
     attack(receipt);
     const reference = verifyReceipt(receipt, keys).ok;
-    const second = run(JSON.stringify(receipt)).status === 0;
+    const second = runReceipt(receipt).status === 0;
     assert.equal(reference, false, `the reference should reject: ${label}`);
     assert.equal(second, reference, `the two implementations disagree on: ${label}`);
   }
@@ -242,5 +249,61 @@ test('the two implementations agree on surrogates, nesting depth, and non-string
   const badRole = JSON.parse(JSON.stringify(item.receipt)) as Receipt;
   badRole.signatures.push({ role: 7, signer: 'x', signature: 'y' } as never);
   assert.equal(verifyReceipt(badRole, keys).ok, false);
-  assert.equal(run(JSON.stringify(badRole)).status, 1, 'the two disagree on a non-string role');
+  assert.equal(runReceipt(badRole).status, 1, 'the two disagree on a non-string role');
+});
+
+// Four more places a rule lived on one side only. Absent-versus-null is the
+// sharpest: a language whose lookup returns null for a missing member cannot
+// tell them apart unless it asks, and the reference requires policy to be
+// present.
+test('the two implementations agree on absent policy, key surrogates, empty roles, and sequences', when, () => {
+  const vector = JSON.parse(readFileSync(VECTOR, 'utf8')) as GoldenVector;
+  const keys = { registryKeys: [vector.keys.registry_public] };
+  const item = vector.receipts[0] as GoldenVector['receipts'][number];
+
+  const sign = (core: Record<string, unknown>): Receipt => {
+    const bytes = canonicalBytes(core);
+    return {
+      ...core,
+      id: sha256Digest(bytes),
+      signatures: [{
+        role: 'agent', signer: agentIdOf(bareJwk(vector.keys.agent_public)), alg: 'Ed25519',
+        key: bareJwk(vector.keys.agent_public), signature: signBytes(bytes, vector.keys.agent_private),
+      }],
+    } as unknown as Receipt;
+  };
+
+  // policy must be present. An explicit null is fine; absent is not.
+  const noPolicy = JSON.parse(JSON.stringify(item.core)) as Record<string, unknown>;
+  delete noPolicy.policy;
+  const signedNoPolicy = sign(noPolicy);
+  assert.equal(verifyReceipt(signedNoPolicy, keys).ok, false, 'an absent policy must fail');
+  assert.equal(run(JSON.stringify(signedNoPolicy)).status, 1, 'the two disagree on an absent policy');
+
+  const nullPolicy = sign({ ...JSON.parse(JSON.stringify(item.core)) as object, policy: null });
+  assert.equal(verifyReceipt(nullPolicy, keys).ok, true, 'an explicit null policy is valid');
+  assert.equal(run(JSON.stringify(nullPolicy)).status, 0, 'the two disagree on a null policy');
+
+  // An unpaired surrogate in a KEY, not just a value: it has to survive both
+  // the sort and the output.
+  const surrogateKey = JSON.parse(JSON.stringify(item.core)) as Record<string, unknown>;
+  surrogateKey.environment = { '\ud800': 'lone surrogate key', ok: 1 };
+  const signedKey = sign(surrogateKey);
+  assert.equal(verifyReceipt(signedKey, keys).ok, true);
+  assert.equal(run(JSON.stringify(signedKey)).status, 0, 'the two disagree on a surrogate in a key');
+
+  // Any string role is an unknown role, empty included.
+  for (const role of ['', '   ', 'runtime']) {
+    const receipt = JSON.parse(JSON.stringify(item.receipt)) as Receipt;
+    receipt.signatures.push({ role, signer: 'x', signature: 'y' } as never);
+    assert.equal(verifyReceipt(receipt, keys).ok, true, `role ${JSON.stringify(role)} should be skipped`);
+    assert.equal(runReceipt(receipt).status, 0, `the two disagree on role ${JSON.stringify(role)}`);
+  }
+
+  // A sequence past the safe integer range is a signed number breaking the
+  // same rule the core obeys.
+  const bigSequence = JSON.parse(JSON.stringify(item.receipt)) as Receipt;
+  (bigSequence.signatures[1] as { sequence: number }).sequence = 2 ** 53;
+  assert.equal(verifyReceipt(bigSequence, keys).ok, false);
+  assert.equal(runReceipt(bigSequence).status, 1, 'the two disagree on an unsafe sequence');
 });

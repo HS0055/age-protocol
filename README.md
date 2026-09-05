@@ -115,14 +115,15 @@ A trust layer nobody can check is just a database with good manners. So:
   everything needed to write your own verifier.
 - **There is already a second implementation.** `docs/protocol/verify.py` is a
   complete verifier in about three hundred lines of Python, written from the
-  specification and sharing no code with this one. CI runs seven differential
+  specification and sharing no code with this one. CI runs eight differential
   tests against it on every push, comparing verdicts on the whole vector,
-  tampered receipts, a padded signature, seventeen malformed receipts,
-  eight forged signature entries, seven inputs that are not receipts, and the
-  three cases where the two canonicalizers could quietly disagree. Agreeing on
-  valid receipts is easy. Those tests exist because agreeing on the invalid
-  ones is the hard part, and it is where earlier versions of that verifier
-  were wrong three separate times.
+  tampered receipts, a padded signature, seventeen malformed receipts, eight
+  forged signature entries, seven inputs that are not receipts, and the cases
+  where the two could quietly disagree: surrogates in values and in keys,
+  nesting depth, role types, an absent versus null member, and sequence
+  bounds. Agreeing on valid receipts is easy. Those tests exist because
+  agreeing on the invalid ones is the hard part, and it is where earlier
+  versions of that verifier were wrong six separate times.
 - **The interop vector is committed.** `docs/protocol/golden-v0.1.json` fixes
   the keys and the content, so any implementation can prove it reproduces the
   exact bytes.
@@ -154,7 +155,7 @@ third-party runtime dependency: `@ageprotocol/receipts` has none at all, and
 the CLI depends only on it. Everything cryptographic comes from `node:crypto`.
 
 The interop tests need `python3` with the `cryptography` package to run the
-second implementation; without it those six tests skip rather than fail. CI
+second implementation; without it those eight tests skip rather than fail. CI
 installs it, so they always run there.
 
 ## Status

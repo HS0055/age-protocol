@@ -311,8 +311,8 @@ export function registrySign(receipt: Receipt, assigned: RegistryAssignment, reg
   if (receipt.id !== receiptIdOf(receipt)) throw new Error('registrySign: receipt id does not match its content');
   if (!agentSignatureOf(receipt)) throw new Error('registrySign: receipt has no agent signature');
   if (registrySignatureOf(receipt)) throw new Error('registrySign: receipt already has a registry signature');
-  if (!Number.isInteger(assigned.sequence) || assigned.sequence < 1) {
-    throw new Error('registrySign: sequence must be a positive integer');
+  if (!Number.isSafeInteger(assigned.sequence) || assigned.sequence < 1) {
+    throw new Error('registrySign: sequence must be a positive integer no greater than Number.MAX_SAFE_INTEGER');
   }
   const signer = registryIdOf(bareJwk(toPublicJwk(registryPrivate)));
   const fields: RegistryEntryFields = { sequence: assigned.sequence, registered_at: assigned.registered_at, signer };
@@ -474,7 +474,8 @@ function registryVerdict(receipt: Receipt, entry: RegistrySignature, keys: Map<s
   const jkt = thumbprintOfId(entry.signer, REGISTRY_ID_PREFIX);
   const key = jkt === undefined ? undefined : keys.get(jkt);
   if (!key) return ['fail', `registry key ${safeText(entry.signer)} not available`];
-  if (!Number.isInteger(entry.sequence) || typeof entry.registered_at !== 'string' || typeof entry.signature !== 'string') {
+  // A sequence is a signed number, so the safe-integer rule reaches it too.
+  if (!Number.isSafeInteger(entry.sequence) || entry.sequence < 1 || typeof entry.registered_at !== 'string' || typeof entry.signature !== 'string') {
     return ['fail', 'registry signature entry is malformed'];
   }
   if (!verifyBytes(registrySigningInput(receipt, entry), entry.signature, key)) return ['fail', 'registry signature does not verify'];

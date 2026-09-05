@@ -100,7 +100,7 @@ verifiers that disagree are worse than one.
 | `inputs` | an array; every entry an object with a string `kind` and a string `digest` |
 | `outputs` | an array; every entry an object with a string `kind` and a string `digest` |
 | `environment` | an object |
-| `policy` | an object, or `null` |
+| `policy` | present, and either an object or `null`. An absent `policy` is not the same as an explicit `null` and is a failure |
 | `id` | a string matching `^sha256:[0-9a-f]{64}$` |
 | `signatures` | an array |
 
@@ -209,9 +209,18 @@ the core's `agent` is inside the signed bytes.
 `alg` must be `Ed25519` on an `agent` or `registry` entry. An entry whose
 `role` is a string the verifier does not know is reported and skipped, never
 judged, so `runtime`, `hardware`, and `organization` signers can be added
-later without breaking verifiers written against v0.1. An entry that is not an
-object, or whose `role` is not a string, is not a signature at all and fails:
-skipping it would let arbitrary content ride inside the array unreported.
+later without breaking verifiers written against v0.1. That holds for **any**
+string, including an empty one: a verifier must not invent extra rules about
+what an unknown role may look like, or it will reject a future version's
+entries for a reason that version never agreed to.
+
+An entry that is not an object, or whose `role` is not a string at all, is not
+a signature and fails: skipping it would let arbitrary content ride inside the
+array unreported.
+
+A `registry` entry's `sequence` must be an integer from 1 to
+9007199254740991. It is a signed number, so the same restriction that governs
+the core applies to it.
 
 Two consequences of the counting rules are worth stating plainly, because both
 are correct and neither is obvious. A byte-identical duplicate of a valid
@@ -319,20 +328,25 @@ hundred lines of Python: another language, another crypto library, its own
 canonicalizer, written from this document rather than from the reference
 code.
 
-`packages/receipts/test/interop.test.ts` runs seven differential tests against
+`packages/receipts/test/interop.test.ts` runs eight differential tests against
 it, comparing verdicts on the whole vector, tampered receipts, a padded
 signature, seventeen malformed receipts, eight forged signature entries, seven
-inputs that are not receipts, and the surrogate, depth, and non-string-role
-cases.
+inputs that are not receipts, and the cases where two implementations quietly
+diverge: surrogates in values and in keys, nesting depth, role types, an
+absent versus an explicitly null member, and sequence bounds.
 
-Those tests exist because this verifier disagreed with the reference three
-separate times: it accepted a receipt with no `timestamp`, it took the first
-entry of each role and so accepted a forged second registry entry, and it
-encoded an unpaired surrogate raw and so computed a different receipt id. Only
-the last is invisible without a differential test, which is the argument for
-having one. Two verifiers that disagree about which receipts are valid are
-worse than one, so the rules above are written to be enforced, not merely
-read.
+Those tests exist because this verifier disagreed with the reference six
+separate times. It accepted a receipt with no `timestamp`. It took the first
+entry of each role, and so accepted a forged second registry entry. It encoded
+an unpaired surrogate raw, and so computed a different receipt id. It had no
+depth limit when the reference did. It could not tell an absent `policy` from
+an explicit null. And it invented a rule of its own, rejecting an empty role
+the reference allows.
+
+Only the last four are invisible without a differential test, which is the
+whole argument for having one. Two verifiers that disagree about which
+receipts are valid are worse than one verifier, so every rule above is written
+to be enforced rather than merely read.
 
 ```
 python3 verify.py golden-v0.1.json

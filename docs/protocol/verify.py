@@ -98,7 +98,11 @@ def serialize(value, depth=0) -> str:
         # supplementary-plane key sorts before U+FFFF: its first code unit is a
         # surrogate at U+D800. Sorting the Python strings themselves would put
         # them the other way round and reproduce neither an id nor a signature.
-        members = sorted(value.items(), key=lambda item: item[0].encode("utf-16-be"))
+        # Sorting is by UTF-16 code unit. surrogatepass is right here and only
+        # here: these bytes order the members and are never emitted, and an
+        # unpaired surrogate in a key would otherwise fail to encode. The key
+        # itself still goes through json_string, which escapes it.
+        members = sorted(value.items(), key=lambda item: item[0].encode("utf-16-be", "surrogatepass"))
         return "{" + ",".join(json_string(k) + ":" + serialize(v, depth + 1) for k, v in members) + "}"
     raise TypeError(f"cannot canonicalize {type(value).__name__}")
 
@@ -193,7 +197,10 @@ def shape_problem(value):
         problem = artifacts_problem(value.get(member), member)
         if problem: return problem
     if not isinstance(value.get("environment"), dict): return "environment must be an object"
-    if value.get("policy") is not None and not isinstance(value.get("policy"), dict):
+    # .get() cannot tell an absent member from an explicit null, and the two
+    # are different here: policy is required, and may be null only if present.
+    if "policy" not in value: return "policy must be an object or null"
+    if value["policy"] is not None and not isinstance(value["policy"], dict):
         return "policy must be an object or null"
     if not isinstance(value.get("id"), str) or not RECEIPT_ID.match(value["id"]):
         return "id must be a sha256: digest"
@@ -310,8 +317,11 @@ def verify(receipt: dict, registry_jwks: list, root_doc=None, proof=None):
             rep(name, False, f"signer {signer!r} is not an age:registry: id"); continue
         if reg.get("alg") != "Ed25519":
             rep(name, False, f'alg {reg.get("alg")!r} is not Ed25519'); continue
-        if not isinstance(reg.get("sequence"), int) or isinstance(reg.get("sequence"), bool) or reg["sequence"] < 1:
-            rep(name, False, f'sequence {reg.get("sequence")!r} is not a positive integer'); continue
+        sequence = reg.get("sequence")
+        if (not isinstance(sequence, int) or isinstance(sequence, bool)
+                or sequence < 1 or sequence > MAX_SAFE):
+            rep(name, False, f"sequence {sequence!r} is not a positive integer no greater than {MAX_SAFE}")
+            continue
         if not isinstance(reg.get("registered_at"), str):
             rep(name, False, "registered_at must be a string"); continue
         key = keys.get(signer.removeprefix("age:registry:"))
@@ -329,13 +339,14 @@ def verify(receipt: dict, registry_jwks: list, root_doc=None, proof=None):
             rep(f"signature entry {i}", False, f"entry {i} is not an object"); continue
         role = entry.get("role")
         if role in ("agent", "registry"): continue
-        if not isinstance(role, str) or not role:
+        if not isinstance(role, str):
             # Not a signature at all. Skipping it would let arbitrary content
-            # ride inside the array unreported.
+            # ride inside the array unreported. An empty string IS a string,
+            # and so is an unknown role rather than a malformed entry.
             rep(f"signature entry {i}", False, f"role {role!r} is not a string")
             continue
         safe = "".join(c for c in role if c.isalnum() or c in "_-")[:32]
-        rep(f"{safe or 'unknown'} signature", None, "unknown role, not checked")
+        rep(f"{safe or 'unknown'} signature", None, f"unknown role {role[:40]}, not checked")
 
     # 5. Commit binding
     act = receipt.get("action", {})
@@ -363,8 +374,15 @@ def verify(receipt: dict, registry_jwks: list, root_doc=None, proof=None):
     return checks
 
 if __name__ == "__main__":
-    g = json.load(open(sys.argv[1]))
-    keys, root_doc = [g["keys"]["registry_public"]], g["root"]["document"]
+    args = [a for a in sys.argv[1:] if a != "--no-root"]
+    # A Merkle leaf is the whole receipt, so any change to the signature array
+    # puts the receipt outside the published root even when the receipt itself
+    # is fine. --no-root asks only "is this receipt valid", which is the
+    # question to ask when comparing two implementations entry by entry.
+    skip_root = "--no-root" in sys.argv
+    g = json.load(open(args[0]))
+    keys, root_doc = [g["keys"]["registry_public"]], (None if skip_root else g["root"]["document"])
+    sys.argv = [sys.argv[0], *args]
     if len(sys.argv) > 2:
         given = json.loads(sys.argv[2])
         # Only a proof that belongs to this receipt is worth applying. Falling
