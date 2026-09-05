@@ -294,6 +294,23 @@ export interface VerifyReceiptOptions {
 }
 
 const NOT_CHECKED = 'not checked, the receipt is malformed';
+const SIGNING_ALGORITHM = 'Ed25519';
+const EMBEDDED_KEY_MEMBERS = ['crv', 'kty', 'x'];
+
+// A receipt embeds the agent key it was signed with, so that key is signed
+// input that nothing else inspects. It carries the three members RFC 7638
+// hashes and no others, or a member no verifier reads could ride along inside
+// the signature.
+function embeddedKeyProblem(value: unknown): string | undefined {
+  if (!isPublicJwk(value)) return 'agent signature carries no public key';
+  const members = Object.keys(value).sort();
+  if (members.length !== EMBEDDED_KEY_MEMBERS.length || members.some((member, i) => member !== EMBEDDED_KEY_MEMBERS[i])) {
+    return `embedded agent key must carry exactly crv, kty, and x, not ${safeText(members.join(', '))}`;
+  }
+  if (value.kty !== 'OKP') return `embedded agent key kty ${safeText(value.kty)} is not OKP`;
+  if (value.crv !== SIGNING_ALGORITHM) return `embedded agent key crv ${safeText(value.crv)} is not ${SIGNING_ALGORITHM}`;
+  return undefined;
+}
 
 // Every check is always reported, so a reader sees the whole picture even
 // when the first one fails. Every entry in the signature array is judged or
@@ -329,23 +346,23 @@ export function verifyReceipt(receipt: Receipt, options: VerifyReceiptOptions = 
 
   const agents = agentSignaturesOf(receipt);
   const agent = agents[0];
+  const keyProblem = agent === undefined ? undefined : embeddedKeyProblem(agent.key);
   if (agents.length !== 1 || !agent) {
     const detail = agents.length === 0 ? 'no agent signature' : `${agents.length} agent signatures, exactly one is required`;
     report('agent_signature', 'fail', detail);
     report('agent_identity', 'fail', detail);
-  } else if (!isPublicJwk(agent.key)) {
-    report('agent_signature', 'fail', 'agent signature carries no public key');
-    report('agent_identity', 'fail', 'agent signature carries no public key');
+  } else if (keyProblem !== undefined) {
+    report('agent_signature', 'fail', keyProblem);
+    report('agent_identity', 'fail', keyProblem);
+  } else if (agent.alg !== SIGNING_ALGORITHM) {
+    // The identity still holds: the key is genuine and binds the id. Only the
+    // claim about how it was used is wrong, so only that check fails.
+    report('agent_signature', 'fail', `alg ${safeText(agent.alg)} is not ${SIGNING_ALGORITHM}`);
+    reportAgentIdentity(receipt, agent, report);
   } else {
     const signatureOk = typeof agent.signature === 'string' && verifyBytes(signingInput, agent.signature, agent.key);
-    report('agent_signature', signatureOk ? 'pass' : 'fail', signatureOk ? agent.signer : 'agent signature does not verify');
-    const derived = agentIdOf(agent.key);
-    const identityOk = derived === agent.signer && derived === receipt.agent;
-    report(
-      'agent_identity',
-      identityOk ? 'pass' : 'fail',
-      identityOk ? 'key thumbprint matches id' : `key thumbprint gives ${derived}, receipt says ${receipt.agent}, signer says ${agent.signer}`,
-    );
+    report('agent_signature', signatureOk ? 'pass' : 'fail', signatureOk ? safeText(agent.signer) : 'agent signature does not verify');
+    reportAgentIdentity(receipt, agent, report);
   }
 
   // Zero registry entries is an unregistered receipt. One keeps the name the
@@ -379,13 +396,27 @@ export function verifyReceipt(receipt: Receipt, options: VerifyReceiptOptions = 
   return { ok: checks.every((check) => check.status !== 'fail'), checks };
 }
 
+type Report = (name: string, status: CheckStatus, detail: string) => void;
+
+function reportAgentIdentity(receipt: Receipt, agent: AgentSignature, report: Report): void {
+  const derived = agentIdOf(agent.key);
+  const identityOk = derived === agent.signer && derived === receipt.agent;
+  report(
+    'agent_identity',
+    identityOk ? 'pass' : 'fail',
+    identityOk ? 'key thumbprint matches id'
+      : `key thumbprint gives ${derived}, receipt says ${safeText(receipt.agent)}, signer says ${safeText(agent.signer)}`,
+  );
+}
+
 function registryVerdict(receipt: Receipt, entry: RegistrySignature, keys: Map<string, PublicJwk>): [CheckStatus, string] {
+  if (entry.alg !== SIGNING_ALGORITHM) return ['fail', `alg ${safeText(entry.alg)} is not ${SIGNING_ALGORITHM}`];
   const jkt = thumbprintOfId(entry.signer, REGISTRY_ID_PREFIX);
   const key = jkt === undefined ? undefined : keys.get(jkt);
-  if (!key) return ['fail', `registry key ${String(entry.signer)} not available`];
+  if (!key) return ['fail', `registry key ${safeText(entry.signer)} not available`];
   if (!Number.isInteger(entry.sequence) || typeof entry.registered_at !== 'string' || typeof entry.signature !== 'string') {
     return ['fail', 'registry signature entry is malformed'];
   }
   if (!verifyBytes(registrySigningInput(receipt, entry), entry.signature, key)) return ['fail', 'registry signature does not verify'];
-  return ['pass', `${entry.signer}  sequence #${entry.sequence}`];
+  return ['pass', `${safeText(entry.signer)}  sequence #${entry.sequence}`];
 }

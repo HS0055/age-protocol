@@ -304,3 +304,39 @@ test('a receipt that is not structurally conformant fails integrity, naming the 
     assert.match(result.checks[0]?.detail ?? '', member, label);
   }
 });
+
+test('an entry claiming an algorithm other than Ed25519 fails, and the message names it', () => {
+  const receipt = registered();
+  const [agentEntry, registryEntry] = receipt.signatures;
+  const claimed: Receipt = { ...receipt, signatures: [{ ...agentEntry, alg: 'HS256' } as never, registryEntry as never] };
+  const result = verifyReceipt(claimed, { registryKeys: [registry.publicJwk] });
+  assert.equal(result.ok, false);
+  assert.equal(result.checks[1]?.status, 'fail');
+  assert.match(result.checks[1]?.detail ?? '', /HS256/);
+  assert.equal(result.checks[2]?.status, 'pass', 'the key still binds the identity');
+
+  const registryClaimed: Receipt = { ...receipt, signatures: [agentEntry as never, { ...registryEntry, alg: 'HS256' } as never] };
+  const second = verifyReceipt(registryClaimed, { registryKeys: [registry.publicJwk] });
+  assert.equal(second.ok, false);
+  assert.equal(second.checks[3]?.status, 'fail');
+  assert.match(second.checks[3]?.detail ?? '', /HS256/);
+
+  const withRuntime: Receipt = { ...receipt, signatures: [...receipt.signatures, { role: 'runtime', signer: 'age:runtime:x', alg: 'HS256', signature: 'A'.repeat(86) }] };
+  assert.equal(verifyReceipt(withRuntime, { registryKeys: [registry.publicJwk] }).ok, true, 'unknown roles are reported, not judged');
+});
+
+test('the embedded agent key carries exactly kty, crv, and x, and nothing else', () => {
+  const receipt = registered();
+  const entry = agentSignatureOf(receipt);
+  assert.ok(entry);
+  const swap = (key: unknown) => ({ ...receipt, signatures: [{ ...entry, key }, ...receipt.signatures.slice(1)] }) as unknown as Receipt;
+  const decorated = swap({ ...bareJwk(agent.publicJwk), kid: 'label', use: 'sig' });
+  const result = verifyReceipt(decorated, { registryKeys: [registry.publicJwk] });
+  assert.equal(result.ok, false);
+  assert.equal(result.checks[1]?.status, 'fail');
+  assert.match(result.checks[1]?.detail ?? '', /exactly/);
+  assert.equal(statuses(swap({ ...bareJwk(agent.publicJwk), kty: 'EC' })).agent_signature, 'fail');
+  assert.equal(statuses(swap({ ...bareJwk(agent.publicJwk), crv: 'P-256' })).agent_signature, 'fail');
+  assert.equal(statuses(swap({ crv: 'Ed25519', kty: 'OKP' })).agent_signature, 'fail');
+  assert.equal(statuses(swap(bareJwk(agent.publicJwk))).agent_signature, 'pass');
+});
