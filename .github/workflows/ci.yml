@@ -13,6 +13,50 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # docs/protocol/verify.py is a second implementation of verification.
+      # Installing its one dependency means the interop test actually runs
+      # here instead of skipping, so every push re-checks that an independent
+      # implementation still agrees with this one.
+      - run: pip install cryptography
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # What a stranger gets from npm has to verify a receipt on its own, from
+      # the published files only, with no workspace and no network.
+      - name: verify a receipt from the packed tarballs
+        run: |
+          set -euo pipefail
+          TMP=$(mktemp -d)
+          (cd packages/receipts && pnpm pack --pack-destination "$TMP")
+          (cd packages/cli && pnpm pack --pack-destination "$TMP")
+          mkdir -p "$TMP/app/node_modules/@ageprotocol"
+          for pkg in receipts cli; do
+            tar -xzf "$TMP/ageprotocol-$pkg-"*.tgz -C "$TMP/app/node_modules/@ageprotocol"
+            mv "$TMP/app/node_modules/@ageprotocol/package" "$TMP/app/node_modules/@ageprotocol/$pkg"
+          done
+          node -e "
+            const g = require('./docs/protocol/golden-v0.1.json');
+            const fs = require('node:fs');
+            const item = g.receipts[0];
+            fs.writeFileSync(process.argv[1] + '/receipt.json', JSON.stringify(item.receipt));
+            fs.writeFileSync(process.argv[1] + '/jwks.json', JSON.stringify({ keys: [g.keys.registry_public] }));
+          " "$TMP/app"
+          cd "$TMP/app"
+          node node_modules/@ageprotocol/cli/bin/agectl.mjs verify receipt.json --jwks jwks.json
+          test "$(ls node_modules/@ageprotocol/cli/src 2>/dev/null | wc -l)" -eq 0

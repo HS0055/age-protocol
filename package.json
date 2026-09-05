@@ -2,11 +2,14 @@
   "name": "age-protocol",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.18" },
+  "engines": {
+    "node": ">=22.18"
+  },
   "packageManager": "pnpm@10.34.1",
   "scripts": {
-    "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck"
+    "build": "pnpm -r build",
+    "test": "pnpm build && pnpm -r test",
+    "typecheck": "pnpm build && pnpm -r typecheck"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

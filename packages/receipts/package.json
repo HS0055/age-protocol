@@ -1,13 +1,24 @@
 {
   "name": "@ageprotocol/receipts",
   "version": "0.1.0",
-  "description": "Signed, chained, verifiable receipts for AI agent work",
+  "description": "AGE Protocol v0.1: signed, verifiable receipts for work performed by AI agents",
   "license": "MIT",
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "engines": { "node": ">=22.18" },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json"
-  }
+  },
+  "files": [
+    "dist"
+  ]
 }

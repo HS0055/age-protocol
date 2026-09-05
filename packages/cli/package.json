@@ -4,13 +4,22 @@
   "description": "agectl, the AGE Protocol command line: verify receipts, manage agent identity",
   "license": "MIT",
   "type": "module",
-  "bin": { "agectl": "./bin/agectl.mjs" },
-  "engines": { "node": ">=22.18" },
+  "bin": {
+    "agectl": "./bin/agectl.mjs"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@ageprotocol/receipts": "workspace:*"
-  }
+  },
+  "files": [
+    "bin",
+    "dist"
+  ]
 }
