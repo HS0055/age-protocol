@@ -159,8 +159,18 @@ installs it, so they always run there.
 
 ## Status
 
-AGE Protocol v0.1. The receipt, attestation, and root formats are frozen by
-the interop vector: changing any of them breaks it, on purpose.
+**AGE Protocol v0.1 is frozen.** The receipt, attestation, and root formats
+are fixed, and the interop vector enforces it: changing any of them breaks the
+vector, on purpose.
+
+Six review rounds gated the freeze. The last one ran 142,336 generated cases
+across three corpora and found zero disagreements between the two
+implementations, zero exceptions, and zero false positives, with every receipt
+that verified also accepted by a third verifier written independently from the
+specification. Earlier rounds found and closed a forged registry entry that
+read as verified, a Merkle walk that truncated above 2^32 leaves, unbounded
+recursion, a publish path that shipped no code, and eleven rules that existed
+in one implementation and not the other.
 
 Not published yet, so every command above runs from a clone. The packages
 build, pack, and verify a receipt from the tarball in an empty directory with

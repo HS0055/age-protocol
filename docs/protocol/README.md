@@ -1,5 +1,10 @@
 # AGE Protocol v0.1
 
+**Frozen.** The receipt, attestation, and root formats and every rule below
+are fixed at v0.1 and will not change. The interop vector enforces that:
+altering any of it breaks `golden-v0.1.json`, on purpose. Anything that would
+require a change here is a v0.2 conversation, not a patch.
+
 AGE is the trust and verification layer for work performed by AI agents.
 
 This document specifies what an AGE receipt is, how an agent signs it, how a
