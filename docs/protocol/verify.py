@@ -82,8 +82,13 @@ def serialize(value) -> str:
     raise TypeError(f"cannot canonicalize {type(value).__name__}")
 
 def canonical(value) -> bytes:
-    """RFC 8785 JCS: UTF-16 key order, ES6 numbers, no whitespace."""
-    return serialize(value).encode("utf-8")
+    """RFC 8785 JCS: UTF-16 key order, ES6 numbers, no whitespace.
+
+    A lone surrogate is valid JSON input and cannot be encoded as UTF-8.
+    Rather than raising, encode it the way a JS engine does, so a receipt
+    carrying one still gets a verdict.
+    """
+    return serialize(value).encode("utf-8", "surrogatepass")
 
 def thumbprint(jwk: dict) -> str:
     """RFC 7638 over the required members only."""
@@ -200,6 +205,21 @@ def verify_inclusion(leaf: bytes, proof: dict, root_hex: str) -> bool:
         fn >>= 1; sn >>= 1
     return sn == 0 and r.hex() == root_hex.lower()
 
+def embedded_key_problem(value):
+    """The embedded agent key carries exactly kty, crv and x, and nothing else.
+
+    It sits outside the core, so two receipts whose keys differ share one id,
+    and a proof is matched by id while a leaf is the whole receipt.
+    """
+    if not isinstance(value, dict): return "agent signature carries no public key"
+    if not all(isinstance(value.get(m), str) for m in ("kty", "crv", "x")):
+        return "agent signature carries no public key"
+    if sorted(value) != ["crv", "kty", "x"]:
+        return "embedded agent key must carry exactly crv, kty, and x, not " + ", ".join(sorted(value))
+    if value["kty"] != "OKP": return f'embedded agent key kty {value["kty"]!r} is not OKP'
+    if value["crv"] != "Ed25519": return f'embedded agent key crv {value["crv"]!r} is not Ed25519'
+    return None
+
 def verify(receipt: dict, registry_jwks: list, root_doc=None, proof=None):
     checks = []
     def rep(name, ok, detail): checks.append((name, ok, detail))
@@ -217,33 +237,66 @@ def verify(receipt: dict, registry_jwks: list, root_doc=None, proof=None):
     recomputed = "sha256:" + hashlib.sha256(canonical(core_of(receipt))).hexdigest()
     rep("Receipt integrity", receipt.get("id") == recomputed, receipt.get("id", "<missing>"))
 
-    entries = [e for e in receipt["signatures"] if isinstance(e, dict)]
-    agent_sig = next((e for e in entries if e.get("role") == "agent"), None)
-    if not agent_sig:
-        rep("Agent signature", False, "absent"); rep("Agent identity", False, "absent")
-    else:
-        # 2. Agent signature over the canonical core
-        rep("Agent signature", ed25519_verify(agent_sig["key"], agent_sig["signature"], canonical(core_of(receipt))),
-            agent_sig["signer"])
-        # 3. Agent identity: key thumbprint must give both signer and agent
-        derived = "age:agent:" + thumbprint(agent_sig["key"])
-        rep("Agent identity", derived == agent_sig["signer"] == receipt["agent"],
-            "key thumbprint matches id" if derived == receipt["agent"] else f"derived {derived}")
+    # Every entry is judged or reported. Taking the first entry of a role and
+    # ignoring the rest is what let a forged second registry entry ride along
+    # invisibly; order carries no meaning and nothing signs the array.
+    entries = receipt["signatures"]
+    agents = [e for e in entries if isinstance(e, dict) and e.get("role") == "agent"]
 
-    # 4. Registry signature over the attestation
-    reg = next((s for s in receipt["signatures"] if s["role"] == "registry"), None)
-    if not reg:
-        rep("Registry signature", None, "absent, unregistered receipt")
+    # 2 and 3. Exactly one agent entry, its key, and its identity.
+    if len(agents) != 1:
+        detail = "no agent signature" if not agents else f"{len(agents)} agent signatures, exactly one is required"
+        rep("Agent signature", False, detail); rep("Agent identity", False, detail)
     else:
-        keys = {thumbprint(k): k for k in registry_jwks}
-        key = keys.get(reg["signer"].removeprefix("age:registry:"))
-        if not key:
-            rep("Registry signature", False, "registry key not available")
+        agent_sig = agents[0]
+        key_problem = embedded_key_problem(agent_sig.get("key"))
+        if key_problem is not None:
+            rep("Agent signature", False, key_problem); rep("Agent identity", False, key_problem)
+        elif agent_sig.get("alg") != "Ed25519":
+            detail = f'alg {agent_sig.get("alg")!r} is not Ed25519'
+            rep("Agent signature", False, detail); rep("Agent identity", False, detail)
         else:
-            attestation = {"attestation_version": "0.1", "receipt": receipt["id"], "agent": receipt["agent"],
-                           "sequence": reg["sequence"], "registered_at": reg["registered_at"], "registry": reg["signer"]}
-            rep("Registry signature", ed25519_verify(key, reg["signature"], canonical(attestation)),
-                f'{reg["signer"]}  sequence #{reg["sequence"]}')
+            rep("Agent signature",
+                ed25519_verify(agent_sig["key"], agent_sig.get("signature"), canonical(core_of(receipt))),
+                str(agent_sig.get("signer")))
+            derived = "age:agent:" + thumbprint(agent_sig["key"])
+            rep("Agent identity", derived == agent_sig.get("signer") == receipt["agent"],
+                "key thumbprint matches id" if derived == receipt["agent"] else f"derived {derived}")
+
+    # 4. Every registry entry, each reported by position when there is more
+    # than one, and every one of them must verify.
+    keys = {thumbprint(k): k for k in registry_jwks}
+    registries = [e for e in entries if isinstance(e, dict) and e.get("role") == "registry"]
+    if not registries:
+        rep("Registry signature", None, "absent, unregistered receipt")
+    for i, reg in enumerate(registries, start=1):
+        name = "Registry signature" if len(registries) == 1 else f"Registry signature {i}"
+        signer = reg.get("signer")
+        if not isinstance(signer, str) or not signer.startswith("age:registry:"):
+            rep(name, False, f"signer {signer!r} is not an age:registry: id"); continue
+        if reg.get("alg") != "Ed25519":
+            rep(name, False, f'alg {reg.get("alg")!r} is not Ed25519'); continue
+        if not isinstance(reg.get("sequence"), int) or isinstance(reg.get("sequence"), bool) or reg["sequence"] < 1:
+            rep(name, False, f'sequence {reg.get("sequence")!r} is not a positive integer'); continue
+        if not isinstance(reg.get("registered_at"), str):
+            rep(name, False, "registered_at must be a string"); continue
+        key = keys.get(signer.removeprefix("age:registry:"))
+        if not key:
+            rep(name, False, f"registry key {signer} not available"); continue
+        attestation = {"attestation_version": "0.1", "receipt": receipt["id"], "agent": receipt["agent"],
+                       "sequence": reg["sequence"], "registered_at": reg["registered_at"], "registry": signer}
+        rep(name, ed25519_verify(key, reg.get("signature"), canonical(attestation)),
+            f'{signer}  sequence #{reg["sequence"]}')
+
+    # Roles this version does not know are carried and reported, never judged,
+    # so runtime, hardware and organization signers can be added later.
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            rep(f"signature entry {i}", False, f"entry {i} is not an object"); continue
+        role = entry.get("role")
+        if role in ("agent", "registry"): continue
+        safe = "unknown" if not isinstance(role, str) else "".join(c for c in role if c.isalnum() or c in "_-")[:32]
+        rep(f"{safe or 'unknown'} signature", None, "unknown role, not checked")
 
     # 5. Commit binding
     act = receipt.get("action", {})
@@ -279,14 +332,22 @@ if __name__ == "__main__":
         # back to another receipt's proof would report a root-inclusion
         # failure that says nothing about the receipt in hand, and would hide
         # whatever the other checks found.
-        proof = next((i["proof"] for i in g["receipts"] if i["receipt"].get("id") == given.get("id")), None)
+        given_id = given.get("id") if isinstance(given, dict) else None
+        proof = next((i["proof"] for i in g["receipts"] if i["receipt"].get("id") == given_id), None)
         items = [{"receipt": given, "proof": proof}]
     else:
         items = g["receipts"]
     failed = False
     for item in items:
-        print(f'{item["receipt"].get("id", "<no id>")}')
-        for name, ok, detail in verify(item["receipt"], keys, root_doc, item["proof"]):
+        receipt = item["receipt"]
+        print(receipt.get("id", "<no id>") if isinstance(receipt, dict) else "<not a receipt>")
+        # The specification requires a verdict for any input, including input
+        # that is not a receipt at all. An exception is not a verdict.
+        try:
+            results = verify(receipt, keys, root_doc, item["proof"])
+        except Exception as error:                                  # noqa: BLE001
+            results = [("Receipt integrity", False, f"{type(error).__name__}: {error}")]
+        for name, ok, detail in results:
             mark = "-" if ok is None else ("PASS" if ok else "FAIL")
             if ok is False: failed = True
             print(f"  [{mark:>4}] {name:<20} {detail}")

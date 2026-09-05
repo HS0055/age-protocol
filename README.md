@@ -19,10 +19,11 @@ node packages/cli/bin/agectl.mjs verify docs/protocol/receipt.json \
 `docs/protocol/receipt.json` is a real receipt, committed so there is something
 to run this against before you have made one of your own.
 
-On publish this becomes one line with nothing installed and no account:
+On publish this becomes the same command with nothing installed and no
+account:
 
 ```
-npx @ageprotocol/cli verify receipt.json
+npx @ageprotocol/cli verify receipt.json --jwks age-jwks.json
 ```
 
 ```
@@ -39,8 +40,16 @@ Change one byte of that file and run it again:
 ```
 ✗ Receipt integrity      mismatch
 ✗ Agent signature        agent signature does not verify
+✓ Agent identity         key thumbprint matches id
+✓ Registry signature     age:registry:kDVVYGHb-C_YZ6dXlhFiaBAYgMpRVL8kCZXPp07RloM  sequence #184
+✓ Commit binding         8fa72c1 (4 files)
 FAILED
 ```
+
+Every check is always reported, including the ones that still pass. The
+registry signature survives because the registry only ever vouched for a
+sequence and a time, and that statement is still true; what broke is the link
+between the receipt's id and its content.
 
 Exit status is 0 for verified, 1 for failed, 2 for a usage error, so this
 works in a script as well as in a terminal.
@@ -59,6 +68,17 @@ works in a script as well as in a terminal.
 Editing content and recomputing the hash does not help an attacker: the agent
 signature covers the content, and the attacker does not have the agent's key.
 That is the difference between a receipt and a log.
+
+### Where the registry key comes from
+
+`--jwks` takes a file or an HTTPS URL. Without it, `agectl` falls back to the
+`jwks` hint inside the receipt's registry entry, **which means a network
+request to a host the receipt names**. Pass `--offline` to forbid that: the
+registry check then fails rather than reaching out, because a claim you cannot
+check is not a claim you should pass.
+
+The example receipt's hint points at a registry that is not deployed yet, so
+run it with `--jwks` as shown above.
 
 The last check needs the registry's published daily tree, which is committed
 here too:
@@ -94,9 +114,13 @@ A trust layer nobody can check is just a database with good manners. So:
 - **The specification is public and complete.** `docs/protocol/README.md` is
   everything needed to write your own verifier.
 - **There is already a second implementation.** `docs/protocol/verify.py` is a
-  full verifier in about two hundred lines of Python, written from the
-  specification, sharing no code with this one. It agrees on every value of the
-  interop vector, and CI re-checks that on every push.
+  complete verifier in about three hundred lines of Python, written from the
+  specification and sharing no code with this one. CI runs four differential
+  tests against it on every push: the whole vector, two tampered receipts, a
+  padded signature, and seventeen malformed receipts that are each correctly
+  signed and wrong in exactly one way. Agreeing on valid receipts is easy;
+  those tests exist because agreeing on the invalid ones is the hard part, and
+  is where the first version of that verifier was wrong.
 - **The interop vector is committed.** `docs/protocol/golden-v0.1.json` fixes
   the keys and the content, so any implementation can prove it reproduces the
   exact bytes.

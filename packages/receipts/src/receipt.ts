@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { canonicalBytes } from './canonical.ts';
+import { canonicalBytes, MAX_DEPTH } from './canonical.ts';
 import { bareJwk, isPublicJwk, keyMapFromJwks, thumbprint, toPublicJwk, type PrivateJwk, type PublicJwk } from './keys.ts';
 import { signBytes, verifyBytes } from './signature.ts';
 
@@ -211,7 +211,8 @@ function artifactsProblem(value: unknown, member: string): string | undefined {
 // only those, and a stranger's first verifier is byte correct. A quantity
 // that is not a whole number belongs in a string, or in a smaller unit:
 // milliseconds, cents, basis points.
-export function coreNumberProblem(value: unknown, path = ''): string | undefined {
+export function coreNumberProblem(value: unknown, path = '', depth = 0): string | undefined {
+  if (depth > MAX_DEPTH) return `${safeText(path) || 'the core'} is nested deeper than ${MAX_DEPTH} levels`;
   if (typeof value === 'number') {
     if (Number.isSafeInteger(value)) return undefined;
     const where = path === '' ? 'the core' : path;
@@ -219,14 +220,14 @@ export function coreNumberProblem(value: unknown, path = ''): string | undefined
   }
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i += 1) {
-      const problem = coreNumberProblem(value[i], `${path}[${i}]`);
+      const problem = coreNumberProblem(value[i], `${path}[${i}]`, depth + 1);
       if (problem !== undefined) return problem;
     }
     return undefined;
   }
   if (isObject(value)) {
     for (const member of Object.keys(value)) {
-      const problem = coreNumberProblem(value[member], path === '' ? member : `${path}.${member}`);
+      const problem = coreNumberProblem(value[member], path === '' ? member : `${path}.${member}`, depth + 1);
       if (problem !== undefined) return problem;
     }
     return undefined;

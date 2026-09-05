@@ -289,11 +289,18 @@ returns a verdict, never an exception.
 
 ## Check this specification against a second implementation
 
-`verify.py` beside this file is a complete AGE v0.1 verifier in about two
+`verify.py` beside this file is a complete AGE v0.1 verifier in about three
 hundred lines of Python: another language, another crypto library, its own
 canonicalizer, written from this document rather than from the reference
-code. It agrees with the reference on every value of the interop vector, and
-a test in `packages/receipts` re-checks that agreement.
+code.
+
+`packages/receipts/test/interop.test.ts` runs four differential tests against
+it: the whole vector, tampered receipts, a padded signature, and seventeen
+malformed receipts that are each correctly signed and wrong in exactly one
+way. That last one exists because the first version of this verifier accepted
+a receipt with no `timestamp` that the reference rejected. Two verifiers that
+disagree about which receipts are valid are worse than one, so the rules above
+are written to be enforced, not merely read.
 
 ```
 python3 verify.py golden-v0.1.json

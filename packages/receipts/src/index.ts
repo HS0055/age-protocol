@@ -1,4 +1,4 @@
-export { canonicalize, canonicalBytes } from './canonical.ts';
+export { canonicalize, canonicalBytes, MAX_DEPTH } from './canonical.ts';
 export {
   generateKeyPair,
   thumbprint,

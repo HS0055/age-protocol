@@ -135,3 +135,57 @@ test('the two implementations agree that a padded signature is not a signature',
   assert.equal(run(JSON.stringify(receipt)).status, 1);
 });
 
+// The forged-signature classes, run against both implementations. The first
+// version of verify.py took the first entry of each role, exactly the defect
+// the reference had removed, so a forged second registry entry, a bogus alg,
+// and a decorated embedded key all read as verified there while the reference
+// rejected them.
+test('the two implementations agree on forged and malformed signature entries', when, () => {
+  const vector = JSON.parse(readFileSync(VECTOR, 'utf8')) as GoldenVector;
+  const keys = { registryKeys: [vector.keys.registry_public] };
+  const genuine = vector.receipts[0]?.receipt as Receipt;
+
+  const attacks: [string, (r: Receipt) => void][] = [
+    ['a forged second registry entry', (r) => {
+      r.signatures.push({
+        role: 'registry', signer: `age:registry:${'A'.repeat(43)}`, alg: 'Ed25519',
+        sequence: 9999, registered_at: '2099-01-01T00:00:00Z', signature: 'A'.repeat(86),
+      } as never);
+    }],
+    ['a second agent entry', (r) => { r.signatures.push({ ...r.signatures[0] } as never); }],
+    ['the agent claims HS256', (r) => { (r.signatures[0] as { alg: string }).alg = 'HS256'; }],
+    ['the registry claims HS256', (r) => { (r.signatures[1] as { alg: string }).alg = 'HS256'; }],
+    ['an extra kid on the embedded key', (r) => {
+      (r.signatures[0] as unknown as { key: Record<string, unknown> }).key.kid = 'label';
+    }],
+    ['the embedded key claims another curve', (r) => {
+      (r.signatures[0] as unknown as { key: Record<string, unknown> }).key.crv = 'P-256';
+    }],
+    ['a signature entry that is null', (r) => { r.signatures.push(null as never); }],
+    ['the registry sequence is rewritten', (r) => {
+      (r.signatures[1] as { sequence: number }).sequence = 1;
+    }],
+  ];
+
+  for (const [label, attack] of attacks) {
+    const receipt = JSON.parse(JSON.stringify(genuine)) as Receipt;
+    attack(receipt);
+    const reference = verifyReceipt(receipt, keys).ok;
+    const second = run(JSON.stringify(receipt)).status === 0;
+    assert.equal(reference, false, `the reference should reject: ${label}`);
+    assert.equal(second, reference, `the two implementations disagree on: ${label}`);
+  }
+});
+
+test('neither implementation raises on input that is not a receipt', when, () => {
+  const hostile = ['null', '42', '"receipt"', '[]', '{}',
+    JSON.stringify({ receipt_version: '0.1', signatures: [null] }),
+    JSON.stringify({ receipt_version: '0.1', signatures: {} })];
+  for (const input of hostile) {
+    const result = run(input);
+    assert.equal(result.status, 1, `expected a verdict, not a crash, for ${input}`);
+    assert.doesNotMatch(result.stdout + result.stderr, /Traceback|AttributeError|TypeError/,
+      `${input} raised instead of reporting`);
+  }
+});
+

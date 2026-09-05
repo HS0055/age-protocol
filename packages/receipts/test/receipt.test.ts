@@ -423,3 +423,32 @@ test('a receipt whose embedded key carries an extra kid fails the agent signatur
   assert.equal(result.checks[1]?.status, 'fail');
   assert.match(result.checks[1]?.detail ?? '', /kid/);
 });
+
+test('a receipt nested deeper than the limit gets a verdict rather than a stack overflow', () => {
+  // A verifier is handed JSON by strangers. Unbounded recursion on
+  // attacker-chosen nesting turns a verdict into an exception, and an
+  // embedding service gets a crash where it asked a question.
+  const deep: Record<string, unknown> = {};
+  let cursor = deep;
+  for (let i = 0; i < 8000; i += 1) {
+    const next: Record<string, unknown> = {};
+    cursor.n = next;
+    cursor = next;
+  }
+  // Built by hand: forge canonicalizes, and canonicalizing this is exactly
+  // what must not happen. verifyReceipt checks the shape, which includes the
+  // depth, before it ever reaches the canonicalizer.
+  const receipt = {
+    ...core(), environment: deep,
+    id: `sha256:${'0'.repeat(64)}`, signatures: [],
+  } as unknown as Receipt;
+  const result = verifyReceipt(receipt, { registryKeys: [registry.publicJwk] });
+  assert.equal(result.ok, false);
+  assert.match(result.checks[0]?.detail ?? '', /nested deeper than 64 levels/);
+
+  // The limit is generous: nothing honest comes close, and normal receipts
+  // are unaffected.
+  let shallow: Record<string, unknown> = { leaf: 1 };
+  for (let i = 0; i < 30; i += 1) shallow = { n: shallow };
+  assert.equal(coreNumberProblem(shallow), undefined);
+});

@@ -12,6 +12,7 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm --filter @ageprotocol/receipts build && pnpm build",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
