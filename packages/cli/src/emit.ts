@@ -74,11 +74,35 @@ function utcOf(value: string, commit: string, which: string): string {
 // bytes, so it cannot be redacted afterwards without destroying the signature
 // and any Merkle leaf built over it.
 export function withoutCredentials(url: string): string {
-  // Only URLs with a scheme have a userinfo component. scp-style
-  // git@host:org/repo carries a username, not a secret, and is left alone.
-  const match = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/@]*@)?(.*)$/.exec(url);
-  if (!match) return url;
-  return `${match[1]}${match[3]}`;
+  // scp-style git@host:org/repo carries a username, not a secret, and has no
+  // userinfo component to strip.
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(url)) return url;
+  try {
+    // A password may itself contain @. Splitting on the first one leaves most
+    // of the secret behind and misnames the host's user; git and curl split
+    // on the last, which is what the URL parser implements.
+    const parsed = new URL(url);
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString();
+  } catch {
+    // Not parseable as a URL. Refusing to guess where the userinfo ends is
+    // safer than guessing wrong, so the caller drops it entirely.
+    return '';
+  }
+}
+
+// The parent lines of the commit object itself. rev-list reports the graph
+// this clone happens to hold, which in a shallow clone is a different history
+// than the one that exists. The object is the same bytes everywhere.
+export function parentsOfObject(object: string): string[] {
+  const parents: string[] = [];
+  for (const line of object.split('\n')) {
+    if (line === '') break; // the header ends at the first blank line
+    const match = /^parent ([0-9a-f]{40})$/.exec(line);
+    if (match?.[1] !== undefined) parents.push(match[1]);
+  }
+  return parents;
 }
 
 const COMMIT_HASH = /^[0-9a-f]{40}$/;
@@ -119,7 +143,25 @@ export async function commitFacts(io: EmitIo, repo: string, ref: string): Promis
   // reproduce this digest, which is what makes it worth recording.
   const object = await io.git(['-C', repo, 'cat-file', 'commit', commit]);
 
-  const parents = (await io.git(['-C', repo, 'rev-list', '--parents', '-n', '1', commit])).trim().split(/\s+/).slice(1);
+  const parents = parentsOfObject(object);
+
+  // A shallow clone grafts history: git reports the commit as parentless and
+  // diffs it against the empty tree, so a one-line change counts as every
+  // file in the repository. The object says otherwise. Rather than sign
+  // either number, refuse and say what would fix it.
+  const base = parents[0];
+  if (base !== undefined) {
+    const present = (await io.git(['-C', repo, 'rev-parse', '--quiet', '--verify', `${base}^{commit}`]).then(
+      (out) => out.trim() !== '',
+      () => false,
+    ));
+    if (!present) {
+      throw new Error(
+        `${commit} has parent ${base}, which this clone does not contain, so its diff cannot be computed. `
+        + 'Run git fetch --unshallow, or deepen the clone, and emit again.',
+      );
+    }
+  }
   const numstat = await io.git(['-C', repo, 'show', '--numstat', '--format=', commit]);
 
   const facts: CommitFacts = {
@@ -127,7 +169,7 @@ export async function commitFacts(io: EmitIo, repo: string, ref: string): Promis
     // Every parent. A merge has two and an octopus merge more, and recording
     // only the first under a singular name would describe a different history
     // than the one that exists.
-    parents: parents.filter((parent) => COMMIT_HASH.test(parent)),
+    parents,
     authored_at: utcOf(authored, commit, 'author'),
     committed_at: utcOf(committed, commit, 'committer'),
     subject: subject.trim(),
@@ -165,6 +207,9 @@ export function buildCore(
     authored_at: facts.authored_at,
     committed_at: facts.committed_at,
   };
+  // What the counts are measured against. For a merge they describe the
+  // first parent only, and for a root commit the empty tree.
+  action.diff_base = facts.parents[0] ?? 'empty-tree';
   if (origin !== undefined) action.repository = origin;
   // A root commit has no parents and says so by omission rather than by
   // carrying an empty list.

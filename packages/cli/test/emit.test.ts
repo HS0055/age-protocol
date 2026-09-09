@@ -5,13 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifyReceipt, agentIdOf } from '@ageprotocol/receipts';
 import { createIdentity, publicJwkOf, readIdentity } from '../src/identity.ts';
-import { buildCore, commitFacts, parseEmitArgs, parseNumstat, runEmit, timestampOf, withoutCredentials, type EmitIo } from '../src/emit.ts';
+import { buildCore, commitFacts, parentsOfObject, parseEmitArgs, parseNumstat, runEmit, timestampOf, withoutCredentials, type EmitIo } from '../src/emit.ts';
 
 const COMMIT = '8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918';
 const PARENT = '1111111111111111111111111111111111111111';
 const OTHER = '2222222222222222222222222222222222222222';
 const BAD_DATE_COMMIT = '3333333333333333333333333333333333333333';
-const OBJECT = `tree aaaa\nparent ${PARENT}\nauthor A <a@example.com> 1757000000 +0000\n\nFix the auth bug\n`;
+const OBJECT = `tree aaaa\nparent ${PARENT}\nauthor A <a@example.com> 1757000000 +0000\ncommitter A <a@example.com> 1757000000 +0000\n\nFix the auth bug\n`;
 
 function home() {
   const dir = mkdtempSync(join(tmpdir(), 'agectl-emit-'));
@@ -47,14 +47,14 @@ const NUMSTAT: Record<string, string> = {
   [OTHER]: '1\t1\tother.ts\n',
 };
 
-const PARENTS: Record<string, string[]> = { [COMMIT]: [PARENT], [OTHER]: [], [BAD_DATE_COMMIT]: [] };
+
 
 // A commit object can carry a date git cannot parse back. Signing it as an
 // invalid date would state something that is not a time.
 COMMITS[BAD_DATE_COMMIT] = { '%aI': 'not-a-date', '%cI': '2026-09-09T10:11:12+02:00', '%s': 'bad date', '%H': BAD_DATE_COMMIT };
 NUMSTAT[BAD_DATE_COMMIT] = '1\t0\tf.txt\n';
 
-function harness(overrides: { remote?: string | Error; resolve?: Record<string, string> } = {}) {
+function harness(overrides: { remote?: string | Error; resolve?: Record<string, string>; present?: string[] } = {}) {
   const calls: string[][] = [];
   const resolve: Record<string, string> = { HEAD: COMMIT, 'HEAD~1': OTHER, ...overrides.resolve };
   const out: string[] = [];
@@ -68,7 +68,12 @@ function harness(overrides: { remote?: string | Error; resolve?: Record<string, 
       const [command] = rest;
 
       if (command === 'rev-parse') {
-        const ref = (rest[1] ?? '').replace(/\^\{commit\}$/, '');
+        const ref = (rest[rest.length - 1] ?? '').replace(/\^\{commit\}$/, '');
+        // --verify asks whether an object is present, which is how a shallow
+        // clone is detected: the parent named in the object is not there.
+        if (rest.includes('--verify')) {
+          return (overrides.present ?? [PARENT, COMMIT, OTHER]).includes(ref) ? `${ref}\n` : '';
+        }
         const hash = resolve[ref];
         if (hash === undefined) throw new Error(`fatal: bad revision '${ref}'`);
         return `${hash}\n`;
@@ -87,10 +92,18 @@ function harness(overrides: { remote?: string | Error; resolve?: Record<string, 
           .split('\u0000').join('\n');
         return `${expanded}\n`;
       }
-      if (command === 'cat-file') return OBJECT;
-      if (command === 'rev-list') {
+      if (command === 'cat-file') {
         const commit = rest[rest.length - 1] as string;
-        return `${[commit, ...(PARENTS[commit] ?? [])].join(' ')}\n`;
+        // Only COMMIT has a parent; the others are roots. Parents now come
+        // from these bytes, so they have to be per-commit.
+        return commit === COMMIT ? OBJECT : `tree bbbb\nauthor A <a@example.com> 1757000000 +0000\n\nroot\n`;
+      }
+      if (command === 'rev-list') {
+        // Deliberately refused. rev-list reports the graph this clone holds,
+        // which in a shallow clone is a different history than the one that
+        // exists, so parents must come from the commit object instead. Any
+        // code that reaches for it here fails loudly.
+        throw new Error('rev-list is not a source of truth for parents');
       }
       if (command === 'show') {
         const commit = rest[rest.length - 1] as string;
@@ -313,6 +326,12 @@ test('a credential in the origin remote never reaches the signed receipt', () =>
   for (const [url, expected] of cases) {
     assert.equal(withoutCredentials(url), expected, url);
   }
+  // A password may itself contain @. Splitting on the first one leaves most
+  // of the secret behind and misnames the host's user; git splits on the last.
+  assert.equal(
+    withoutCredentials('https://deploy:Pa@ssw0rd-SECRET@github.com/acme/private.git'),
+    'https://github.com/acme/private.git');
+  assert.equal(withoutCredentials('https://ghp_AB@CD_TOKEN@host/repo'), 'https://host/repo');
 });
 
 test('a token in origin does not appear anywhere in the emitted receipt', async () => {
@@ -442,6 +461,49 @@ test('the remote is recorded when there is one', async () => {
     await runEmit(['--task', 't', '--out', 'r.json'], dir, io);
     const receipt = JSON.parse(files['r.json'] as string) as Record<string, Record<string, unknown>>;
     assert.equal(receipt.action?.repository, 'https://github.com/ageprotocol/demo.git');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a shallow clone refuses rather than signing a diff against the wrong base', async () => {
+  const dir = home();
+  try {
+    // actions/checkout defaults to depth 1, so this is the likeliest
+    // production environment. git grafts the history there: it reports the
+    // commit as parentless and diffs it against the empty tree, so a one-line
+    // change counts as every file in the repository.
+    const { io, err } = harness({ present: [COMMIT, OTHER] });
+    assert.equal(await runEmit(['--task', 't', '--out', 'r.json'], dir, io), 2);
+    const message = err.join('\n');
+    assert.match(message, /this clone does not contain/);
+    assert.match(message, /unshallow/, 'the message says what would fix it');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('parents come from the commit object, not from the graph this clone holds', () => {
+  // rev-list reports the grafted history in a shallow clone. The object bytes
+  // are the same everywhere, so the parent lines in it are always true.
+  assert.deepEqual(parentsOfObject(OBJECT), [PARENT]);
+  assert.deepEqual(parentsOfObject('tree aaa\n\nroot commit\n'), []);
+  const merge = `tree aaa\nparent ${PARENT}\nparent ${OTHER}\nauthor A\n\nmerge\n`;
+  assert.deepEqual(parentsOfObject(merge), [PARENT, OTHER]);
+  // A parent line in the message body is not a header.
+  assert.deepEqual(parentsOfObject(`tree aaa\n\nbody\nparent ${OTHER}\n`), []);
+});
+
+test('the counts say what they are measured against', async () => {
+  const dir = home();
+  try {
+    const { io, files } = harness();
+    await runEmit(['--task', 't', '--out', 'r.json'], dir, io);
+    const action = (JSON.parse(files['r.json'] as string) as { action: Record<string, unknown> }).action;
+    // files_changed means "differs from the first parent", not "changed".
+    // For a merge that is a narrower truth and for a root commit it is the
+    // empty tree, so the receipt names the base rather than implying one.
+    assert.equal(action.diff_base, PARENT);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
