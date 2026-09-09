@@ -26,7 +26,11 @@ function git(args: string[]): Promise<string> {
     // repository, which can otherwise deliver a subject in another encoding
     // that arrives as replacement characters and gets signed that way.
     const forced = ['-c', 'i18n.logOutputEncoding=UTF-8', '-c', 'core.quotePath=true', ...args];
-    execFile('git', forced, { maxBuffer: 64 * 1024 * 1024, encoding: 'utf8' }, (error, stdout, stderr) => {
+    // GIT_DIR and friends silently override -C, which is exactly the
+    // environment inside a post-commit hook: asking about one repository
+    // would describe another. The flag the caller passed must win.
+    const { GIT_DIR: _d, GIT_WORK_TREE: _w, GIT_INDEX_FILE: _i, GIT_COMMON_DIR: _c, ...clean } = process.env;
+    execFile('git', forced, { maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', env: clean }, (error, stdout, stderr) => {
       if (error) reject(new Error(`git ${args.join(' ')}: ${String(stderr || error.message).trim()}`));
       else resolve(stdout);
     });

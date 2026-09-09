@@ -9,6 +9,8 @@ import { buildCore, commitFacts, parseEmitArgs, parseNumstat, runEmit, timestamp
 
 const COMMIT = '8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918';
 const PARENT = '1111111111111111111111111111111111111111';
+const OTHER = '2222222222222222222222222222222222222222';
+const BAD_DATE_COMMIT = '3333333333333333333333333333333333333333';
 const OBJECT = `tree aaaa\nparent ${PARENT}\nauthor A <a@example.com> 1757000000 +0000\n\nFix the auth bug\n`;
 
 function home() {
@@ -17,30 +19,91 @@ function home() {
   return dir;
 }
 
-// git is stubbed rather than run, so the tests are deterministic and describe
-// exactly which commands emission is allowed to depend on.
-function harness(overrides: Record<string, string | Error> = {}) {
+// A fake git rather than a stub. The difference matters: the old version
+// matched a substring of the joined arguments and returned a fixed answer, so
+// no test could see which commit or which format git was asked for. A review
+// reintroduced ten defects and this suite caught four. Among the six it
+// missed was reading the committer date under the author's name, which is the
+// bug that shipped. This fake expands the format string it is given and
+// resolves the ref it is given, so asking the wrong question gets the wrong
+// answer and a test notices.
+const COMMITS: Record<string, Record<string, string>> = {
+  [COMMIT]: {
+    '%aI': '2020-03-01T09:00:00+05:30',
+    '%cI': '2026-09-09T10:11:12+02:00',
+    '%s': 'Fix the auth bug',
+    '%H': COMMIT,
+  },
+  [OTHER]: {
+    '%aI': '2019-01-01T00:00:00Z',
+    '%cI': '2019-01-02T00:00:00Z',
+    '%s': 'A different commit entirely',
+    '%H': OTHER,
+  },
+};
+
+const NUMSTAT: Record<string, string> = {
+  [COMMIT]: '3\t1\tsrc/auth.ts\n10\t0\tsrc/session.ts\n-\t-\tlogo.png\n',
+  [OTHER]: '1\t1\tother.ts\n',
+};
+
+const PARENTS: Record<string, string[]> = { [COMMIT]: [PARENT], [OTHER]: [], [BAD_DATE_COMMIT]: [] };
+
+// A commit object can carry a date git cannot parse back. Signing it as an
+// invalid date would state something that is not a time.
+COMMITS[BAD_DATE_COMMIT] = { '%aI': 'not-a-date', '%cI': '2026-09-09T10:11:12+02:00', '%s': 'bad date', '%H': BAD_DATE_COMMIT };
+NUMSTAT[BAD_DATE_COMMIT] = '1\t0\tf.txt\n';
+
+function harness(overrides: { remote?: string | Error; resolve?: Record<string, string> } = {}) {
   const calls: string[][] = [];
-  const responses: Record<string, string | Error> = {
-    'rev-parse': `${COMMIT}\n`,
-    'show -s': '2020-03-01T09:00:00+05:30\n2026-09-09T10:11:12+02:00\nFix the auth bug\n',
-    'cat-file': OBJECT,
-    'rev-list': `${COMMIT} ${PARENT}\n`,
-    'show --numstat': '3\t1\tsrc/auth.ts\n10\t0\tsrc/session.ts\n-\t-\tlogo.png\n',
-    'remote': 'https://github.com/ageprotocol/demo.git\n',
-    ...overrides,
-  };
+  const resolve: Record<string, string> = { HEAD: COMMIT, 'HEAD~1': OTHER, ...overrides.resolve };
   const out: string[] = [];
   const err: string[] = [];
   const files: Record<string, string> = {};
+
   const io: EmitIo = {
     git: async (args) => {
       calls.push(args);
-      const key = Object.keys(responses).find((k) => args.join(' ').includes(k));
-      const value = key === undefined ? undefined : responses[key];
-      if (value === undefined) throw new Error(`unstubbed git: ${args.join(' ')}`);
-      if (value instanceof Error) throw value;
-      return value;
+      const rest = args.slice(2); // past -C <repo>
+      const [command] = rest;
+
+      if (command === 'rev-parse') {
+        const ref = (rest[1] ?? '').replace(/\^\{commit\}$/, '');
+        const hash = resolve[ref];
+        if (hash === undefined) throw new Error(`fatal: bad revision '${ref}'`);
+        return `${hash}\n`;
+      }
+      if (command === 'show' && rest.includes('-s')) {
+        const format = (rest.find((a) => a.startsWith('--format=')) ?? '').slice('--format='.length);
+        const commit = rest[rest.length - 1] as string;
+        const fields = COMMITS[commit];
+        if (!fields) throw new Error(`fatal: unknown commit ${commit}`);
+        // Expand exactly what was asked for. Asking for %cI gets the
+        // committer date, which is the point.
+        // %n is a separator, expanded before the field tokens so the field
+        // pattern cannot swallow it.
+        const expanded = format.replace(/%n/g, '\u0000')
+          .replace(/%[a-zA-Z]+/g, (token) => fields[token] ?? `<unsupported ${token}>`)
+          .split('\u0000').join('\n');
+        return `${expanded}\n`;
+      }
+      if (command === 'cat-file') return OBJECT;
+      if (command === 'rev-list') {
+        const commit = rest[rest.length - 1] as string;
+        return `${[commit, ...(PARENTS[commit] ?? [])].join(' ')}\n`;
+      }
+      if (command === 'show') {
+        const commit = rest[rest.length - 1] as string;
+        const stat = NUMSTAT[commit];
+        if (stat === undefined) throw new Error(`fatal: unknown commit ${commit}`);
+        return stat;
+      }
+      if (command === 'remote') {
+        const remote = overrides.remote ?? 'https://github.com/ageprotocol/demo.git\n';
+        if (remote instanceof Error) throw remote;
+        return remote;
+      }
+      throw new Error(`unstubbed git: ${args.join(' ')}`);
     },
     stdout: (line) => out.push(line),
     stderr: (line) => err.push(line),
@@ -68,7 +131,7 @@ test('every fact in a receipt comes from git, and nothing is estimated', async (
   const { io } = harness();
   const facts = await commitFacts(io, '.', 'HEAD');
   assert.equal(facts.commit, COMMIT);
-  assert.equal(facts.parent, PARENT);
+  assert.deepEqual(facts.parents, [PARENT]);
   assert.equal(facts.subject, 'Fix the auth bug');
   assert.equal(facts.files_changed, 3);
   assert.equal(facts.insertions, 13);
@@ -148,7 +211,6 @@ test('a repository with no origin still emits, saying less rather than something
     assert.equal(code, 0);
     const receipt = JSON.parse(files['r.json'] as string);
     assert.equal((receipt.action as Record<string, unknown>).repository, undefined);
-    assert.equal((receipt.environment as Record<string, unknown>).workspace, undefined);
     assert.equal(verifyReceipt(receipt).ok, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -158,7 +220,7 @@ test('a repository with no origin still emits, saying less rather than something
 test('emission refuses rather than guessing when git cannot answer', async () => {
   const dir = home();
   try {
-    const { io, err } = harness({ 'rev-parse': 'not-a-commit\n' });
+    const { io, err } = harness({ resolve: { HEAD: 'not-a-commit' } });
     assert.equal(await runEmit(['--task', 'x', '--out', 'r.json'], dir, io), 2);
     assert.match(err.join('\n'), /did not resolve/);
   } finally {
@@ -223,14 +285,14 @@ test('buildCore never invents a value it was not given', () => {
   const facts = {
     commit: COMMIT, authored_at: '2026-09-09T08:11:12Z', subject: 's',
     committed_at: '2026-09-09T08:11:12Z',
-    files_changed: 0, insertions: 0, deletions: 0, object_digest: 'sha256:00',
+    parents: [], files_changed: 0, insertions: 0, deletions: 0, object_digest: 'sha256:00',
   };
   const core = buildCore(identity, facts, { task: 't', repo: '.', commit: 'HEAD' }, undefined, new Date('2026-09-09T12:00:00Z'));
   assert.equal(core.inputs.length, 0, 'no prompt given, so no input is recorded');
-  assert.equal((core.action as Record<string, unknown>).parent, undefined, 'a root commit has no parent');
+  assert.equal((core.action as Record<string, unknown>).parents, undefined, 'a root commit has no parents');
   assert.equal((core.action as Record<string, unknown>).repository, undefined);
   assert.equal(core.policy, null);
-  assert.equal(core.environment.runtime, 'agectl/0.1.1');
+  assert.match(String(core.environment.runtime), /^agectl/);
 });
 
 test('a credential in the origin remote never reaches the signed receipt', () => {
@@ -262,7 +324,6 @@ test('a token in origin does not appear anywhere in the emitted receipt', async 
     assert.doesNotMatch(text, /ghp_SECRETTOKEN/, 'the credential must not be in the signed bytes');
     const receipt = JSON.parse(text);
     assert.equal((receipt.action as Record<string, unknown>).repository, 'https://github.com/org/repo.git');
-    assert.equal((receipt.environment as Record<string, unknown>).workspace, 'https://github.com/org/repo.git');
     assert.equal(verifyReceipt(receipt).ok, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -285,9 +346,102 @@ test('an unwritable output path is an exit code, not a stack trace', async () =>
 test('a date git cannot express is refused rather than signed as Invalid Date', async () => {
   const dir = home();
   try {
-    const { io, err } = harness({ 'show -s': 'not-a-date\n2026-09-09T10:11:12+02:00\nsubject\n' });
+    const { io, err } = harness({ resolve: { HEAD: BAD_DATE_COMMIT } });
     assert.equal(await runEmit(['--task', 'x', '--out', 'r.json'], dir, io), 2);
     assert.match(err.join('\n'), /unreadable author date/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A review reintroduced ten defects into emit and this suite caught four.
+// These cover the six it missed. Each names a way the receipt could describe
+// the wrong thing while every value in it still looks plausible.
+test('the facts describe the commit that was asked for, and nothing else', async () => {
+  const dir = home();
+  try {
+    // HEAD and HEAD~1 are different commits with different everything. A
+    // gather that used a hardcoded ref, or read metadata from the raw ref
+    // rather than the resolved hash, would mix them.
+    const { io, files, calls } = harness();
+    await runEmit(['--task', 't', '--commit', 'HEAD~1', '--out', 'r.json'], dir, io);
+    const receipt = JSON.parse(files['r.json'] as string);
+    const action = receipt.action as Record<string, unknown>;
+    assert.equal(action.commit, OTHER);
+    assert.equal(action.subject, 'A different commit entirely');
+    assert.equal(action.files_changed, 1, 'the numstat is HEAD~1 own, not HEAD s');
+    assert.equal(action.insertions, 1);
+    assert.equal(action.authored_at, '2019-01-01T00:00:00Z');
+
+    // Every git call after the first resolves against the full hash, never
+    // the ref, so nothing can shift between calls.
+    const afterResolve = calls.filter((c) => !c.includes('rev-parse') && !c.includes('remote'));
+    assert.ok(afterResolve.length >= 3, 'metadata, object and numstat are all gathered');
+    for (const call of afterResolve) {
+      assert.ok(call.includes(OTHER), `every gather names the resolved hash: ${call.join(' ')}`);
+      assert.ok(!call.includes('HEAD~1'), `no gather uses the raw ref: ${call.join(' ')}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the dates come from the fields they are named after', async () => {
+  const dir = home();
+  try {
+    const { io, files, calls } = harness();
+    await runEmit(['--task', 't', '--out', 'r.json'], dir, io);
+    const action = (JSON.parse(files['r.json'] as string) as { action: Record<string, unknown> }).action;
+    // The fake expands whatever format it is given, so swapping %aI for %cI
+    // in the source changes these values and this test fails.
+    assert.equal(action.authored_at, '2020-03-01T03:30:00Z');
+    assert.equal(action.committed_at, '2026-09-09T08:11:12Z');
+    const format = calls.flat().find((a) => a.startsWith('--format='));
+    assert.ok(format?.includes('%aI'), 'the author date is actually requested');
+    assert.ok(format?.includes('%cI'), 'the committer date is actually requested');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the line counts in the receipt are the counts git reported, unrounded', async () => {
+  const dir = home();
+  try {
+    const { io, files } = harness();
+    await runEmit(['--task', 't', '--out', 'r.json'], dir, io);
+    const action = (JSON.parse(files['r.json'] as string) as { action: Record<string, unknown> }).action;
+    // Asserted on the receipt, not on commitFacts. The earlier test checked
+    // the gather and would not have noticed a value rounded on its way in.
+    assert.equal(action.files_changed, 3);
+    assert.equal(action.insertions, 13);
+    assert.equal(action.deletions, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the parent is the commit parent, not the commit itself', async () => {
+  const dir = home();
+  try {
+    const { io, files } = harness();
+    await runEmit(['--task', 't', '--out', 'r.json'], dir, io);
+    const action = (JSON.parse(files['r.json'] as string) as { action: Record<string, unknown> }).action;
+    // rev-list --parents prints the commit first and its parents after, so
+    // an off-by-one here records the commit as its own parent.
+    assert.deepEqual(action.parents, [PARENT]);
+    assert.ok(!(action.parents as string[]).includes(COMMIT));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the remote is recorded when there is one', async () => {
+  const dir = home();
+  try {
+    const { io, files } = harness();
+    await runEmit(['--task', 't', '--out', 'r.json'], dir, io);
+    const receipt = JSON.parse(files['r.json'] as string) as Record<string, Record<string, unknown>>;
+    assert.equal(receipt.action?.repository, 'https://github.com/ageprotocol/demo.git');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

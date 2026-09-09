@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { agentSign, type Receipt, type ReceiptCore } from '@ageprotocol/receipts';
 import { publicJwkOf, readIdentity, type IdentityFile } from './identity.ts';
 
@@ -9,7 +10,7 @@ export const EMIT_USAGE = 'usage: agectl emit --task <text> [--repo <path>] [--c
 // guesses is a receipt that lies, and the whole point is that it does not.
 export interface CommitFacts {
   commit: string;
-  parent?: string;
+  parents: string[];
   authored_at: string;
   committed_at: string;
   subject: string;
@@ -35,6 +36,20 @@ export interface EmitOptions {
   runtime?: string;
   out?: string;
   json?: boolean;
+}
+
+// The version of this tool, read from its own manifest rather than written
+// out by hand, so a receipt never names a version that was never published.
+export function defaultRuntime(): string {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version?: unknown };
+    if (typeof manifest.version === 'string') return `agectl/${manifest.version}`;
+  } catch {
+    // A packaging accident must not stop a receipt being written.
+  }
+  return 'agectl';
 }
 
 function digestOf(text: string): string {
@@ -109,14 +124,16 @@ export async function commitFacts(io: EmitIo, repo: string, ref: string): Promis
 
   const facts: CommitFacts = {
     commit,
+    // Every parent. A merge has two and an octopus merge more, and recording
+    // only the first under a singular name would describe a different history
+    // than the one that exists.
+    parents: parents.filter((parent) => COMMIT_HASH.test(parent)),
     authored_at: utcOf(authored, commit, 'author'),
     committed_at: utcOf(committed, commit, 'committer'),
     subject: subject.trim(),
     ...parseNumstat(numstat),
     object_digest: digestOf(object),
   };
-  const parent = parents[0];
-  if (parent !== undefined && COMMIT_HASH.test(parent)) facts.parent = parent;
   return facts;
 }
 
@@ -149,14 +166,15 @@ export function buildCore(
     committed_at: facts.committed_at,
   };
   if (origin !== undefined) action.repository = origin;
-  if (facts.parent !== undefined) action.parent = facts.parent;
+  // A root commit has no parents and says so by omission rather than by
+  // carrying an empty list.
+  if (facts.parents.length > 0) action.parents = facts.parents;
 
   const inputs = options.prompt === undefined
     ? []
     : [{ kind: 'prompt', digest: digestOf(options.prompt) }];
 
-  const environment: Record<string, unknown> = { runtime: options.runtime ?? 'agectl/0.1.1' };
-  if (origin !== undefined) environment.workspace = origin;
+  const environment: Record<string, unknown> = { runtime: options.runtime ?? defaultRuntime() };
 
   return {
     receipt_version: '0.1',
