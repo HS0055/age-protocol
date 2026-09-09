@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { runVerify, VERIFY_USAGE } from './verify.ts';
 import { runIdentity, identityHome, IDENTITY_USAGE } from './identity.ts';
+import { runEmit, EMIT_USAGE } from './emit.ts';
 
 const USAGE = [
   'usage: agectl <command>',
@@ -9,10 +11,23 @@ const USAGE = [
   'commands:',
   '  verify     verify an AGE receipt',
   '  identity   create or show the agent identity on this machine',
+  '  emit       write a receipt for a commit this machine just made',
   '',
   VERIFY_USAGE,
   IDENTITY_USAGE,
+  EMIT_USAGE,
 ].join('\n');
+
+function git(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // A large diff can exceed the default buffer, and a truncated numstat
+    // would silently undercount rather than fail.
+    execFile('git', args, { maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) reject(new Error(`git ${args.join(' ')}: ${String(stderr || error.message).trim()}`));
+      else resolve(stdout);
+    });
+  });
+}
 
 function gitCommitExists(repo: string, commit: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -42,6 +57,14 @@ export async function main(argv: string[], env: Record<string, string | undefine
       return runVerify(rest, io);
     case 'identity':
       return runIdentity(rest, identityHome(env), io);
+    case 'emit':
+      return runEmit(rest, identityHome(env), {
+        git,
+        stdout: io.stdout,
+        stderr: io.stderr,
+        writeFile: (path: string, text: string) => writeFile(path, text, 'utf8'),
+        now: () => new Date(),
+      });
     case undefined:
     case '--help':
     case '-h':
