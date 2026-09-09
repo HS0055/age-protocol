@@ -54,14 +54,25 @@ jobs:
           cd "$TMP/app"
           node node_modules/@ageprotocol/cli/bin/agectl.mjs verify receipt.json --jwks age-jwks.json
 
+      # npm publish, not pnpm publish. pnpm does not implement provenance and
+      # ignores --provenance without a word, which is how v0.1.0 shipped with
+      # no attestation. Dependency order matters: the CLI depends on receipts.
       - name: publish with provenance
         if: github.event_name == 'release' || inputs.dry_run == false
-        run: pnpm -r publish --access public --provenance --no-git-checks
+        run: |
+          set -euo pipefail
+          for pkg in receipts cli; do
+            ( cd "packages/$pkg" && npm publish --provenance --access public )
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: dry run
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
-        run: pnpm -r publish --access public --provenance --no-git-checks --dry-run
+        run: |
+          set -euo pipefail
+          for pkg in receipts cli; do
+            ( cd "packages/$pkg" && npm publish --provenance --access public --dry-run )
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

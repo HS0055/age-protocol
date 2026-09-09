@@ -35,6 +35,10 @@ true.
 
 `pnpm release` remains for a local publish without provenance. Prefer the
 workflow.
+
+**Publish with `npm publish`, never `pnpm publish`.** pnpm does not implement
+provenance and ignores `--provenance` silently, which is how v0.1.0 shipped
+without an attestation. A published version cannot gain one afterwards.
 Each package also builds on `prepack`, because `dist/` is gitignored: without
 that hook the published tarball would contain a `bin` script importing a
 `dist/index.js` that was never built. That failure is invisible to a local
