@@ -11,6 +11,7 @@ export interface CommitFacts {
   commit: string;
   parent?: string;
   authored_at: string;
+  committed_at: string;
   subject: string;
   files_changed: number;
   insertions: number;
@@ -46,6 +47,25 @@ export function timestampOf(date: Date): string {
   return `${date.toISOString().slice(0, 19)}Z`;
 }
 
+function utcOf(value: string, commit: string, which: string): string {
+  const at = new Date(value.trim());
+  if (Number.isNaN(at.getTime())) throw new Error(`${commit} has an unreadable ${which} date: ${value.trim()}`);
+  return `${at.toISOString().slice(0, 19)}Z`;
+}
+
+// A remote can carry a credential: git clone https://user:token@host/repo
+// writes it into origin verbatim, and CI systems do the same. That must never
+// reach a receipt, because the receipt is signed and its id covers those
+// bytes, so it cannot be redacted afterwards without destroying the signature
+// and any Merkle leaf built over it.
+export function withoutCredentials(url: string): string {
+  // Only URLs with a scheme have a userinfo component. scp-style
+  // git@host:org/repo carries a username, not a secret, and is left alone.
+  const match = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/@]*@)?(.*)$/.exec(url);
+  if (!match) return url;
+  return `${match[1]}${match[3]}`;
+}
+
 const COMMIT_HASH = /^[0-9a-f]{40}$/;
 const NUMSTAT_LINE = /^(\d+|-)\t(\d+|-)\t/;
 
@@ -69,8 +89,16 @@ export async function commitFacts(io: EmitIo, repo: string, ref: string): Promis
   const commit = (await io.git(['-C', repo, 'rev-parse', `${ref}^{commit}`])).trim();
   if (!COMMIT_HASH.test(commit)) throw new Error(`git did not resolve ${ref} to a commit`);
 
-  const [authored, subject] = (await io.git(['-C', repo, 'show', '-s', '--format=%cI%n%s', commit])).split('\n');
-  if (authored === undefined || subject === undefined) throw new Error(`git returned no metadata for ${commit}`);
+  // %aI is when the work was written, %cI when it was committed. A rebase,
+  // amend, cherry-pick or squash keeps the first and rewrites the second, so
+  // recording one under the other's name misstates the date on most branches.
+  // Both are recorded, each named for what it is.
+  const [authored, committed, subject] = (
+    await io.git(['-C', repo, 'show', '-s', '--format=%aI%n%cI%n%s', commit])
+  ).split('\n');
+  if (authored === undefined || committed === undefined || subject === undefined) {
+    throw new Error(`git returned no metadata for ${commit}`);
+  }
 
   // The commit object itself, hashed. Anyone with the repository can
   // reproduce this digest, which is what makes it worth recording.
@@ -81,7 +109,8 @@ export async function commitFacts(io: EmitIo, repo: string, ref: string): Promis
 
   const facts: CommitFacts = {
     commit,
-    authored_at: `${new Date(authored.trim()).toISOString().slice(0, 19)}Z`,
+    authored_at: utcOf(authored, commit, 'author'),
+    committed_at: utcOf(committed, commit, 'committer'),
     subject: subject.trim(),
     ...parseNumstat(numstat),
     object_digest: digestOf(object),
@@ -94,7 +123,7 @@ export async function commitFacts(io: EmitIo, repo: string, ref: string): Promis
 export async function originOf(io: EmitIo, repo: string): Promise<string | undefined> {
   try {
     const url = (await io.git(['-C', repo, 'remote', 'get-url', 'origin'])).trim();
-    return url === '' ? undefined : url;
+    return url === '' ? undefined : withoutCredentials(url);
   } catch {
     // A repository with no origin is still a repository. The receipt says
     // less about it rather than saying something untrue.
@@ -117,6 +146,7 @@ export function buildCore(
     insertions: facts.insertions,
     deletions: facts.deletions,
     authored_at: facts.authored_at,
+    committed_at: facts.committed_at,
   };
   if (origin !== undefined) action.repository = origin;
   if (facts.parent !== undefined) action.parent = facts.parent;
@@ -206,7 +236,12 @@ export async function runEmit(args: string[], home: string, io: EmitIo): Promise
 
   const text = `${JSON.stringify(receipt, null, 2)}\n`;
   if (options.out !== undefined) {
-    await io.writeFile(options.out, text);
+    try {
+      await io.writeFile(options.out, text);
+    } catch (problem) {
+      io.stderr(`cannot write ${options.out}: ${problem instanceof Error ? problem.message : String(problem)}`);
+      return 2;
+    }
     if (!options.json) {
       io.stdout('Receipt emitted');
       io.stdout(`  id      ${receipt.id}`);

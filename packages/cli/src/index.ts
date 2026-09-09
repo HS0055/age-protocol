@@ -22,7 +22,11 @@ function git(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     // A large diff can exceed the default buffer, and a truncated numstat
     // would silently undercount rather than fail.
-    execFile('git', args, { maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+    // Force UTF-8 rather than inheriting i18n.logOutputEncoding from the
+    // repository, which can otherwise deliver a subject in another encoding
+    // that arrives as replacement characters and gets signed that way.
+    const forced = ['-c', 'i18n.logOutputEncoding=UTF-8', '-c', 'core.quotePath=true', ...args];
+    execFile('git', forced, { maxBuffer: 64 * 1024 * 1024, encoding: 'utf8' }, (error, stdout, stderr) => {
       if (error) reject(new Error(`git ${args.join(' ')}: ${String(stderr || error.message).trim()}`));
       else resolve(stdout);
     });

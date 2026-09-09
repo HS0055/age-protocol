@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifyReceipt, agentIdOf } from '@ageprotocol/receipts';
 import { createIdentity, publicJwkOf, readIdentity } from '../src/identity.ts';
-import { buildCore, commitFacts, parseEmitArgs, parseNumstat, runEmit, timestampOf, type EmitIo } from '../src/emit.ts';
+import { buildCore, commitFacts, parseEmitArgs, parseNumstat, runEmit, timestampOf, withoutCredentials, type EmitIo } from '../src/emit.ts';
 
 const COMMIT = '8fa72c1e5b9d4a3f2e1c0b9a8d7f6e5c4b3a2918';
 const PARENT = '1111111111111111111111111111111111111111';
@@ -23,7 +23,7 @@ function harness(overrides: Record<string, string | Error> = {}) {
   const calls: string[][] = [];
   const responses: Record<string, string | Error> = {
     'rev-parse': `${COMMIT}\n`,
-    'show -s': '2026-09-09T10:11:12+02:00\nFix the auth bug\n',
+    'show -s': '2020-03-01T09:00:00+05:30\n2026-09-09T10:11:12+02:00\nFix the auth bug\n',
     'cat-file': OBJECT,
     'rev-list': `${COMMIT} ${PARENT}\n`,
     'show --numstat': '3\t1\tsrc/auth.ts\n10\t0\tsrc/session.ts\n-\t-\tlogo.png\n',
@@ -74,8 +74,11 @@ test('every fact in a receipt comes from git, and nothing is estimated', async (
   assert.equal(facts.insertions, 13);
   assert.equal(facts.deletions, 1);
   assert.match(facts.object_digest, /^sha256:[0-9a-f]{64}$/);
-  // The authored time is the commit's, converted to UTC, not the clock's.
-  assert.equal(facts.authored_at, '2026-09-09T08:11:12Z');
+  // The author date is when the work was written; the committer date is when
+  // it landed. A rebase keeps the first and rewrites the second, so recording
+  // one under the other's name misstates the date on most branches.
+  assert.equal(facts.authored_at, '2020-03-01T03:30:00Z');
+  assert.equal(facts.committed_at, '2026-09-09T08:11:12Z');
 });
 
 test('an emitted receipt verifies, and its commit binding holds', async () => {
@@ -219,6 +222,7 @@ test('buildCore never invents a value it was not given', () => {
   const identity = { identity_version: '0.1' as const, id: 'age:agent:x', created_at: 'now', private_jwk: {} as never };
   const facts = {
     commit: COMMIT, authored_at: '2026-09-09T08:11:12Z', subject: 's',
+    committed_at: '2026-09-09T08:11:12Z',
     files_changed: 0, insertions: 0, deletions: 0, object_digest: 'sha256:00',
   };
   const core = buildCore(identity, facts, { task: 't', repo: '.', commit: 'HEAD' }, undefined, new Date('2026-09-09T12:00:00Z'));
@@ -227,4 +231,64 @@ test('buildCore never invents a value it was not given', () => {
   assert.equal((core.action as Record<string, unknown>).repository, undefined);
   assert.equal(core.policy, null);
   assert.equal(core.environment.runtime, 'agectl/0.1.1');
+});
+
+test('a credential in the origin remote never reaches the signed receipt', () => {
+  // git clone https://user:token@host/repo writes the credential into origin
+  // verbatim, and CI systems do the same. A receipt is signed and its id
+  // covers those bytes, so a leak here cannot be redacted afterwards without
+  // destroying the signature and any Merkle leaf built over it.
+  const cases: [string, string][] = [
+    ['https://ghp_EXAMPLETOKEN0123456789abcdef@github.com/org/repo.git', 'https://github.com/org/repo.git'],
+    ['https://user:password@gitlab.com/org/repo.git', 'https://gitlab.com/org/repo.git'],
+    ['https://gitlab-ci-token:glcbt-XYZ@gitlab.com/o/r.git', 'https://gitlab.com/o/r.git'],
+    ['ssh://git@github.com/org/repo.git', 'ssh://github.com/org/repo.git'],
+    ['https://github.com/org/repo.git', 'https://github.com/org/repo.git'],
+    // scp-style carries a username, not a secret, and is conventional.
+    ['git@github.com:org/repo.git', 'git@github.com:org/repo.git'],
+    ['/srv/git/repo.git', '/srv/git/repo.git'],
+  ];
+  for (const [url, expected] of cases) {
+    assert.equal(withoutCredentials(url), expected, url);
+  }
+});
+
+test('a token in origin does not appear anywhere in the emitted receipt', async () => {
+  const dir = home();
+  try {
+    const { io, files } = harness({ remote: 'https://ghp_SECRETTOKEN0123456789abcdef@github.com/org/repo.git\n' });
+    await runEmit(['--task', 'Fix it', '--out', 'r.json'], dir, io);
+    const text = files['r.json'] as string;
+    assert.doesNotMatch(text, /ghp_SECRETTOKEN/, 'the credential must not be in the signed bytes');
+    const receipt = JSON.parse(text);
+    assert.equal((receipt.action as Record<string, unknown>).repository, 'https://github.com/org/repo.git');
+    assert.equal((receipt.environment as Record<string, unknown>).workspace, 'https://github.com/org/repo.git');
+    assert.equal(verifyReceipt(receipt).ok, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an unwritable output path is an exit code, not a stack trace', async () => {
+  const dir = home();
+  try {
+    const { io, err } = harness();
+    io.writeFile = async () => { throw new Error('EACCES: permission denied'); };
+    const code = await runEmit(['--task', 'Fix it', '--out', '/nope/r.json'], dir, io);
+    assert.equal(code, 2);
+    assert.match(err.join('\n'), /cannot write \/nope\/r\.json/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a date git cannot express is refused rather than signed as Invalid Date', async () => {
+  const dir = home();
+  try {
+    const { io, err } = harness({ 'show -s': 'not-a-date\n2026-09-09T10:11:12+02:00\nsubject\n' });
+    assert.equal(await runEmit(['--task', 'x', '--out', 'r.json'], dir, io), 2);
+    assert.match(err.join('\n'), /unreadable author date/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
