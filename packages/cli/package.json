@@ -1,6 +1,6 @@
 {
   "name": "@ageprotocol/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "agectl, the AGE Protocol command line: verify receipts, manage agent identity",
   "license": "MIT",
   "repository": {

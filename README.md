@@ -8,23 +8,16 @@ happened, that anyone can verify without asking us.
 
 ## Verify a receipt
 
-Not yet on npm. Today, from a clone:
+Nothing to install and no account:
 
 ```
-pnpm install && pnpm build
-node packages/cli/bin/agectl.mjs verify docs/protocol/receipt.json \
-  --jwks docs/protocol/age-jwks.json
-```
-
-`docs/protocol/receipt.json` is a real receipt, committed so there is something
-to run this against before you have made one of your own.
-
-On publish this becomes the same command with nothing installed and no
-account:
-
-```
+curl -sO https://raw.githubusercontent.com/HS0055/age-protocol/main/docs/protocol/receipt.json
+curl -sO https://raw.githubusercontent.com/HS0055/age-protocol/main/docs/protocol/age-jwks.json
 npx @ageprotocol/cli verify receipt.json --jwks age-jwks.json
 ```
+
+That receipt is committed in `docs/protocol/`, so there is something to run
+this against before you have made one of your own.
 
 ```
 ✓ Receipt integrity      sha256:9701e8874d3057f99ef7ecb5b3d0962682961227375e330c0cbf9ab606af7afb
@@ -107,6 +100,41 @@ registry can revoke it. A registry can only say "I recognise this key from
 sequence N onward". The private key never leaves the file, which is written
 `0600`.
 
+## Emit a receipt for real work
+
+Commit something, then:
+
+```
+npx @ageprotocol/cli emit --task "Fix the login redirect" --out receipt.json
+npx @ageprotocol/cli verify receipt.json --repo .
+```
+
+`emit` reads the commit and signs a receipt describing it with the identity on
+this machine. Every value in it comes from git and nothing is estimated: the
+commit, its subject, its parents, when it was authored and when it was
+committed, and the files, insertions and deletions it changed. A prompt passed
+with `--prompt` is recorded as a digest, never as text.
+
+It refuses rather than guessing. In a shallow clone, which is what CI checkouts
+are by default, git cannot see the commit's parent and would report every file
+in the repository as changed, so `emit` stops and says to fetch the rest.
+
+**Given `--repo`, `verify` recomputes those claims instead of repeating them.**
+A receipt that says a commit changed 42 files, checked against the repository
+that shows it changed one, fails:
+
+```
+✗ Commit binding         the repository disagrees: files_changed says 42, repository says 1
+FAILED
+```
+
+Without `--repo` the counts are reported as unchecked, because saying so is the
+difference between reporting a claim and confirming it.
+
+An emitted receipt is unregistered until a registry countersigns it, which is
+valid: the registry check reads as skipped rather than failed. The open
+registry service is next.
+
 ## Don't trust AGE. Verify AGE.
 
 A trust layer nobody can check is just a database with good manners. So:
@@ -135,7 +163,7 @@ that issued it, including us.
 ## Layout
 
 - `packages/receipts`: canonical JSON, keys, signatures, receipts, Merkle roots
-- `packages/cli`: `agectl`, with `verify` and `identity`
+- `packages/cli`: `agectl`, with `verify`, `identity`, and `emit`
 - `docs/protocol`: the specification, the interop vector, and a second verifier
 
 ## Develop
@@ -172,11 +200,14 @@ read as verified, a Merkle walk that truncated above 2^32 leaves, unbounded
 recursion, a publish path that shipped no code, and eleven rules that existed
 in one implementation and not the other.
 
-Not published yet, so every command above runs from a clone. The packages
-build, pack, and verify a receipt from the tarball in an empty directory with
-no network, and CI checks that on every push, so publishing is a decision
-rather than a task. The registry service, `agectl emit`, and git integration
-are next.
+Published on npm as `@ageprotocol/receipts` and `@ageprotocol/cli`. Every
+release is built and published by the workflow in this repository, which runs
+the full suite and verifies a receipt from the packed tarballs before
+publishing. From 0.1.1 both packages carry an npm provenance attestation tying
+them to that workflow run; 0.1.0 does not, because `pnpm publish` ignored the
+flag without a word.
+
+The registry service is next.
 
 ## License
 
