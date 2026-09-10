@@ -2,11 +2,15 @@ import {
   isPublicJwk, keyMapFromJwks, verifyReceipt, verifyRoot, verifyRootInclusion, registrySignaturesOf,
   type Check, type CheckStatus, type PublicJwk, type Receipt, type RootDocument, type RootProof,
 } from '@ageprotocol/receipts';
+import { type CommitFacts } from './emit.ts';
 
 export interface VerifyIo {
   readFile(path: string): Promise<string>;
   fetchText(url: string): Promise<string>;
   gitCommitExists(repo: string, commit: string): Promise<boolean>;
+  // Given a repository, the checkable facts about a commit, or undefined when
+  // this verifier cannot gather them.
+  gitFacts?(repo: string, commit: string): Promise<CommitFacts | undefined>;
   stdout(line: string): void;
   stderr(line: string): void;
 }
@@ -136,6 +140,7 @@ function sanitized(io: VerifyIo): VerifyIo {
     readFile: (path) => io.readFile(path),
     fetchText: (url) => io.fetchText(url),
     gitCommitExists: (repo, commit) => io.gitCommitExists(repo, commit),
+    gitFacts: io.gitFacts?.bind(io),
     stdout: (line) => io.stdout(strip(line)),
     stderr: (line) => io.stderr(strip(line)),
   };
@@ -198,6 +203,26 @@ async function readInputs(parsed: ParsedArgs, io: VerifyIo): Promise<Inputs> {
 // verifyReceipt rather than after it, so it sees receipts whose shape has
 // already failed, and the specification requires a verdict for any input
 // rather than an exception. A null in outputs used to throw here.
+// Only members the receipt actually asserts are compared. A receipt that says
+// less is not wrong; one that says something different is.
+function claimsAgainst(action: Record<string, unknown>, facts: CommitFacts): string[] {
+  const problems: string[] = [];
+  const compare = (member: string, claimed: unknown, actual: unknown) => {
+    if (claimed === undefined) return;
+    if (JSON.stringify(claimed) !== JSON.stringify(actual)) {
+      problems.push(`${member} says ${JSON.stringify(claimed)}, repository says ${JSON.stringify(actual)}`);
+    }
+  };
+  compare('subject', action.subject, facts.subject);
+  compare('files_changed', action.files_changed, facts.files_changed);
+  compare('insertions', action.insertions, facts.insertions);
+  compare('deletions', action.deletions, facts.deletions);
+  compare('parents', action.parents, facts.parents.length > 0 ? facts.parents : undefined);
+  compare('authored_at', action.authored_at, facts.authored_at);
+  compare('committed_at', action.committed_at, facts.committed_at);
+  return problems;
+}
+
 async function commitBinding(receipt: Receipt, repo: string | undefined, io: VerifyIo): Promise<Check> {
   const name = 'commit_binding';
   const action: unknown = (receipt as { action?: unknown }).action;
@@ -212,12 +237,29 @@ async function commitBinding(receipt: Receipt, repo: string | undefined, io: Ver
   if (!listed) return { name, status: 'fail', detail: 'commit is not among the outputs' };
   const files = action.files_changed;
   const suffix = Number.isInteger(files) ? ` (${String(files)} files)` : '';
-  if (repo !== undefined) {
-    const exists = await io.gitCommitExists(repo, commit);
-    if (!exists) return { name, status: 'fail', detail: `commit ${commit} not found in ${repo}` };
-    return { name, status: 'pass', detail: `${commit.slice(0, 7)} exists in ${repo}${suffix}` };
+  if (repo === undefined) {
+    // Without a repository the counts are the receipt's word, reported rather
+    // than confirmed. Saying so is the difference between the two.
+    return { name, status: 'pass', detail: `${commit.slice(0, 7)}${suffix}, counts unchecked` };
   }
-  return { name, status: 'pass', detail: `${commit.slice(0, 7)}${suffix}` };
+
+  const exists = await io.gitCommitExists(repo, commit);
+  if (!exists) return { name, status: 'fail', detail: `commit ${commit} not found in ${repo}` };
+
+  // With a repository, everything the receipt claims about the commit is
+  // recomputed from it. Echoing the receipt's own numbers back was the
+  // residual hole: a receipt could misstate what a commit changed, be pointed
+  // at the repository that disproves it, and still verify.
+  const facts = io.gitFacts === undefined ? undefined : await io.gitFacts(repo, commit);
+  if (facts === undefined) {
+    return { name, status: 'pass', detail: `${commit.slice(0, 7)} exists in ${repo}${suffix}, counts unchecked` };
+  }
+
+  const disagreements = claimsAgainst(action, facts);
+  if (disagreements.length > 0) {
+    return { name, status: 'fail', detail: `the repository disagrees: ${disagreements.join('; ')}` };
+  }
+  return { name, status: 'pass', detail: `${commit.slice(0, 7)} in ${repo}, ${facts.files_changed} files confirmed` };
 }
 
 function rootInclusion(receipt: Receipt, root: RootDocument, proof: RootProof, keys: Map<string, PublicJwk>): Check {

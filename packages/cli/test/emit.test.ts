@@ -508,3 +508,22 @@ test('the counts say what they are measured against', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a parent header after the author line is not a parent, as git reads it', () => {
+  // git accepts parent lines only contiguously after tree. A well-formed
+  // object with a later parent header passes fsck --strict, so a parser that
+  // scans the whole header asserts an ancestry edge that does not exist.
+  const forged = [
+    'tree aaaa',
+    `parent ${PARENT}`,
+    'author D <d@e.com> 1788990000 +0000',
+    'committer D <d@e.com> 1788990000 +0000',
+    `parent ${OTHER}`,
+    '',
+    'extra parent header',
+  ].join('\n');
+  assert.deepEqual(parentsOfObject(forged), [PARENT], 'only the contiguous run counts');
+
+  // A commit with no tree line yields nothing rather than guessing.
+  assert.deepEqual(parentsOfObject(`parent ${PARENT}\n\nbody\n`), []);
+});

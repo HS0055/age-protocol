@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { writeFile } from 'node:fs/promises';
 import { runVerify, VERIFY_USAGE } from './verify.ts';
 import { runIdentity, identityHome, IDENTITY_USAGE } from './identity.ts';
-import { runEmit, EMIT_USAGE } from './emit.ts';
+import { runEmit, commitFacts, EMIT_USAGE, type CommitFacts } from './emit.ts';
 
 const USAGE = [
   'usage: agectl <command>',
@@ -64,6 +64,15 @@ export async function main(argv: string[], env: Record<string, string | undefine
     readFile: (path: string) => readFile(path, 'utf8'),
     fetchText,
     gitCommitExists,
+    // Given --repo, verification recomputes what the receipt claims about the
+    // commit instead of repeating it.
+    gitFacts: async (repo: string, commit: string): Promise<CommitFacts | undefined> => {
+      try {
+        return await commitFacts({ git, stdout: () => {}, stderr: () => {}, writeFile: async () => {}, now: () => new Date() }, repo, commit);
+      } catch {
+        return undefined;
+      }
+    },
     stdout: (line: string) => console.log(line),
     stderr: (line: string) => console.error(line),
   };

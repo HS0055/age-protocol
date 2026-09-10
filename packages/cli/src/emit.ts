@@ -97,10 +97,20 @@ export function withoutCredentials(url: string): string {
 // than the one that exists. The object is the same bytes everywhere.
 export function parentsOfObject(object: string): string[] {
   const parents: string[] = [];
+  let seenTree = false;
   for (const line of object.split('\n')) {
     if (line === '') break; // the header ends at the first blank line
+    if (!seenTree) {
+      if (line.startsWith('tree ')) seenTree = true;
+      continue;
+    }
+    // git accepts parent lines only contiguously after tree, so scanning the
+    // whole header lets a well-formed object carry a later parent line that
+    // git ignores and this would have believed. fsck --strict passes such an
+    // object, so the two parsers must agree on where the list ends.
     const match = /^parent ([0-9a-f]{40})$/.exec(line);
-    if (match?.[1] !== undefined) parents.push(match[1]);
+    if (match?.[1] === undefined) break;
+    parents.push(match[1]);
   }
   return parents;
 }

@@ -5,7 +5,23 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createIdentity } from '../src/identity.ts';
+import { agentSign } from '@ageprotocol/receipts';
 import { main } from '../src/index.ts';
+
+// Captures what the verifier printed, so a test can assert on the reason and
+// not only the exit code.
+async function verifyInto(args: string[], receipt: string, lines: string[]): Promise<number> {
+  const log = console.log;
+  const error = console.error;
+  console.log = (line: string) => lines.push(String(line));
+  console.error = (line: string) => lines.push(String(line));
+  try {
+    return await main(['verify', receipt, ...args], process.env);
+  } finally {
+    console.log = log;
+    console.error = error;
+  }
+}
 
 // These run real git. A fake cannot model a replace ref, a shallow graft, or
 // an environment variable redirecting the repository, and each of those made
@@ -130,6 +146,50 @@ test('a shallow clone refuses rather than counting the whole repository as chang
   } finally {
     rmSync(upstream, { recursive: true, force: true });
     if (shallow !== '') rmSync(shallow, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a receipt that misstates a commit fails against the repository that disproves it', when, async () => {
+  const dir = repo();
+  const home = mkdtempSync(join(tmpdir(), 'agectl-home-'));
+  createIdentity(home);
+  try {
+    commit(dir, 'a.txt', 'one\n', 'the first commit');
+    commit(dir, 'a.txt', 'two\n', 'change one line');
+
+    const honest = join(dir, 'honest.json');
+    assert.equal(await emitInto(dir, home, ['--out', honest]), 0);
+
+    // Re-signed with the same key, so every signature is valid and only the
+    // content is false. Nothing about the cryptography can catch this; only
+    // the repository can.
+    const receipt = JSON.parse(readFileSync(honest, 'utf8')) as Record<string, unknown>;
+    const { id: _id, signatures: _sigs, ...core } = receipt;
+    (core.action as Record<string, unknown>).files_changed = 42;
+    (core.action as Record<string, unknown>).insertions = 1337;
+    const identity = JSON.parse(readFileSync(join(home, 'identity.json'), 'utf8')) as { private_jwk: never };
+    const forged = join(dir, 'forged.json');
+    writeFileSync(forged, JSON.stringify(agentSign(core as never, identity.private_jwk)));
+
+    // On its own it verifies, and says plainly that the counts were not checked.
+    const alone: string[] = [];
+    assert.equal(await verifyInto(['--offline'], forged, alone), 0);
+    assert.match(alone.join('\n'), /counts unchecked/);
+
+    // Against the repository it fails, naming both disagreements.
+    const checked: string[] = [];
+    assert.equal(await verifyInto(['--repo', dir, '--offline'], forged, checked), 1);
+    const printed = checked.join('\n');
+    assert.match(printed, /files_changed says 42, repository says 1/);
+    assert.match(printed, /insertions says 1337, repository says 1/);
+
+    // The honest one still passes, and says the counts were confirmed.
+    const good: string[] = [];
+    assert.equal(await verifyInto(['--repo', dir, '--offline'], honest, good), 0);
+    assert.match(good.join('\n'), /files confirmed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }
 });
