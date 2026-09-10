@@ -70,7 +70,7 @@ const VERIFIED_LINES = [
   `✓ Agent signature        ${receipt.agent}`,
   '✓ Agent identity         key thumbprint matches id',
   `✓ Registry signature     ${REGISTRY_SIGNER}  sequence #184`,
-  '✓ Commit binding         8fa72c1 (3 files)',
+  '✓ Commit binding         8fa72c1 (3 files), counts unchecked',
   'VERIFIED',
 ];
 
@@ -117,7 +117,10 @@ test('an unregistered receipt skips the registry check and is still VERIFIED', a
 test('--repo checks that the commit exists', async () => {
   const present = harness({}, { commitExists: true });
   assert.equal(await runVerify(['receipt.json', '--jwks', 'jwks.json', '--repo', '/tmp/demo'], present.io), 0);
-  assert.equal(present.out[4], '✓ Commit binding         8fa72c1 exists in /tmp/demo (3 files)');
+  // This harness supplies no gitFacts, so the verifier says the counts were
+  // not checked rather than implying it confirmed them. A real run with
+  // --repo recomputes them; see emit.git.test.ts.
+  assert.equal(present.out[4], '✓ Commit binding         8fa72c1 exists in /tmp/demo (3 files), counts unchecked');
   const missing = harness({}, { commitExists: false });
   assert.equal(await runVerify(['receipt.json', '--jwks', 'jwks.json', '--repo', '/tmp/demo'], missing.io), 1);
   assert.match(missing.out[4] ?? '', /^✗ Commit binding         commit .* not found in \/tmp\/demo/);
