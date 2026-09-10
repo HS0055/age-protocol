@@ -39,30 +39,55 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
 
-      - name: verify a receipt from the packed tarballs
+      # The tarballs verified here are the exact files published below. They
+      # used to be different things: this step packed with pnpm, which rewrites
+      # workspace:* to a real version, while the publish step ran npm publish
+      # on the directory, which does not. cli 0.1.1 shipped depending on
+      # "workspace:*" and could not be installed by anyone. Packing once and
+      # publishing those same bytes means the thing tested is the thing shipped.
+      - name: pack once
         run: |
           set -euo pipefail
-          TMP=$(mktemp -d)
-          (cd packages/receipts && pnpm pack --pack-destination "$TMP")
-          (cd packages/cli && pnpm pack --pack-destination "$TMP")
-          mkdir -p "$TMP/app/node_modules/@ageprotocol"
+          mkdir -p "$RUNNER_TEMP/dist"
           for pkg in receipts cli; do
-            tar -xzf "$TMP/ageprotocol-$pkg-"*.tgz -C "$TMP/app/node_modules/@ageprotocol"
-            mv "$TMP/app/node_modules/@ageprotocol/package" "$TMP/app/node_modules/@ageprotocol/$pkg"
+            ( cd "packages/$pkg" && pnpm pack --pack-destination "$RUNNER_TEMP/dist" )
           done
-          cp docs/protocol/receipt.json docs/protocol/age-jwks.json "$TMP/app/"
-          cd "$TMP/app"
-          node node_modules/@ageprotocol/cli/bin/agectl.mjs verify receipt.json --jwks age-jwks.json
+          ls -l "$RUNNER_TEMP/dist"
 
-      # npm publish, not pnpm publish. pnpm does not implement provenance and
+      # Installed with npm, not unpacked by hand, so npm resolves each tarball's
+      # dependencies exactly as a user's install would. A workspace: specifier
+      # or any other unpublishable reference fails here instead of on npm.
+      - name: install the tarballs the way a user would, then verify a receipt
+        run: |
+          set -euo pipefail
+          for tgz in "$RUNNER_TEMP/dist"/*.tgz; do
+            if tar -xzOf "$tgz" package/package.json | grep -q '"workspace:'; then
+              echo "::error::$(basename "$tgz") still declares a workspace: dependency"; exit 1
+            fi
+          done
+          APP="$RUNNER_TEMP/app"
+          mkdir -p "$APP" && cd "$APP" && npm init -y >/dev/null
+          npm install --no-audit --no-fund "$RUNNER_TEMP"/dist/ageprotocol-receipts-*.tgz "$RUNNER_TEMP"/dist/ageprotocol-cli-*.tgz
+          cp "$GITHUB_WORKSPACE/docs/protocol/receipt.json" "$GITHUB_WORKSPACE/docs/protocol/age-jwks.json" .
+          npx --no-install agectl verify receipt.json --jwks age-jwks.json
+
+      # npm publish, not pnpm publish: pnpm does not implement provenance and
       # ignores --provenance without a word, which is how v0.1.0 shipped with
-      # no attestation. Dependency order matters: the CLI depends on receipts.
+      # no attestation. A version already on npm is skipped rather than failing
+      # the run, so a release that changes one package does not need the other
+      # bumped. Dependency order matters: the CLI depends on receipts.
       - name: publish with provenance
         if: github.event_name == 'release' || inputs.dry_run == false
         run: |
           set -euo pipefail
           for pkg in receipts cli; do
-            ( cd "packages/$pkg" && npm publish --provenance --access public )
+            name=$(node -p "require('./packages/$pkg/package.json').name")
+            version=$(node -p "require('./packages/$pkg/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already published, skipping"
+              continue
+            fi
+            npm publish "$RUNNER_TEMP"/dist/ageprotocol-$pkg-$version.tgz --provenance --access public
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -72,7 +97,8 @@ jobs:
         run: |
           set -euo pipefail
           for pkg in receipts cli; do
-            ( cd "packages/$pkg" && npm publish --provenance --access public --dry-run )
+            version=$(node -p "require('./packages/$pkg/package.json').version")
+            npm publish "$RUNNER_TEMP"/dist/ageprotocol-$pkg-$version.tgz --provenance --access public --dry-run
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
